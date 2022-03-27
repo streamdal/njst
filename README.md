@@ -60,8 +60,8 @@ graph TD;
 2. `njst` node emits a new job message to the cluster (via NATS)
 3. All `njst` nodes get the new job message
 4. All `njst` nodes start the job
-5. All `njst` nodes send their results back via NATS
-6. All `njst` nodes listen for result completions and analyze the result
+5. All `njst` nodes send their results back via NATS KV
+6. All `njst` nodes listen for result completions in result KV and analyze the result
 7. Any `njst` node can now respond to a "status" HTTP call for a specific job
 
 
