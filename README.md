@@ -44,7 +44,7 @@ that are currently connected to the cluster
 
 ## Internal Flow
 
-The general job flow can visualized via this the following mermaid diagram:
+The general job flow can visualized via this confusing mermaid diagram:
 
 ```mermaid
 graph TD;
