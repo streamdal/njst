@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/httpsvc"
 	"github.com/batchcorp/njst/natssvc"
 	uuid "github.com/satori/go.uuid"
@@ -78,17 +79,23 @@ func main() {
 
 	logrus.Debug("Starting NATS service")
 
+	// Create dependencies
 	n, err := natssvc.New(params)
 	if err != nil {
 		logrus.Fatal("Unable to setup NATS service: ", err)
 	}
 
-	h, err := httpsvc.New(params, VERSION)
+	b, err := bench.New(params)
+	if err != nil {
+		logrus.Fatal("Unable to setup benchmark service: ", err)
+	}
+
+	h, err := httpsvc.New(params, n, b, VERSION)
 	if err != nil {
 		logrus.Fatal("Unable to setup HTTP service: ", err)
 	}
 
-	// Launch services
+	// Start services
 	if err := n.Start(); err != nil {
 		logrus.Fatal("Unable to start NATS service: ", err)
 	}
@@ -110,8 +117,9 @@ func main() {
 	logrus.Infof("NodeID:                       %s", params.NodeID)
 	logrus.Infof("HTTP server listening on:     %s", params.HTTPAddress)
 	logrus.Infof("Nodes in cluster:             %d", len(nodes))
+	logrus.Infof("HTTP API listening on:        %s", params.HTTPAddress)
 	logrus.Info("")
-	logrus.Infof("njst ready -- HTTP API listening on '%s'", params.HTTPAddress)
+	logrus.Info("njst ready!")
 
 	// Catch SIGINT, remove our heartbeat key
 	c := make(chan os.Signal, 1)
