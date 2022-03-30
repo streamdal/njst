@@ -27,11 +27,11 @@ type Bench struct {
 }
 
 type Producer struct {
-	Settings *types.ProducerSettings
+	Settings *types.WriteSettings
 }
 
 type Consumer struct {
-	Settings *types.ConsumerSettings
+	Settings *types.ReadSettings
 }
 
 func New(p *cli.Params) (*Bench, error) {
@@ -107,7 +107,7 @@ func validateConsumerSettings(settings *types.Settings) error {
 		return errors.New("settings cannot be nil")
 	}
 
-	if settings.Consumer == nil {
+	if settings.Read == nil {
 		return errors.New("consumer settings cannot be nil")
 	}
 
@@ -119,14 +119,14 @@ func validateProducerSettings(settings *types.Settings) error {
 		return errors.New("settings cannot be nil")
 	}
 
-	if settings.Producer == nil {
+	if settings.Write == nil {
 		return errors.New("producer settings cannot be nil")
 	}
 
 	return nil
 }
 
-func setDefaultProducerSettings(settings *types.ProducerSettings) {
+func setDefaultProducerSettings(settings *types.WriteSettings) {
 	if settings == nil {
 		return
 	}
@@ -144,7 +144,7 @@ func setDefaultProducerSettings(settings *types.ProducerSettings) {
 	}
 }
 
-func setDefaultConsumerSettings(settings *types.ConsumerSettings) {
+func setDefaultConsumerSettings(settings *types.ReadSettings) {
 	if settings == nil {
 		return
 	}
@@ -171,7 +171,7 @@ func SetDefaultSettings(settings *types.Settings) {
 		settings.NumReplicas = DefaultNumReplicas
 	}
 
-	setDefaultProducerSettings(settings.Producer)
-	setDefaultConsumerSettings(settings.Consumer)
+	setDefaultProducerSettings(settings.Write)
+	setDefaultConsumerSettings(settings.Read)
 
 }

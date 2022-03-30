@@ -156,7 +156,7 @@ func (n *NATSService) SetupBench(httpSettings *types.Settings) ([]*types.NATSSet
 	}
 
 	// Create consumers
-	if httpSettings.Consumer != nil {
+	if httpSettings.Read != nil {
 		for _, streamName := range streams {
 			consumerGroupName := "cg-" + streamName
 
@@ -172,7 +172,7 @@ func (n *NATSService) SetupBench(httpSettings *types.Settings) ([]*types.NATSSet
 	}
 
 	// Create producers
-	if httpSettings.Producer != nil {
+	if httpSettings.Write != nil {
 
 	}
 

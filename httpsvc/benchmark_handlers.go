@@ -14,14 +14,14 @@ import (
 )
 
 func (h *HTTPService) getBenchmarkHandler(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	id := ps.ByName("id")
+	name := ps.ByName("name")
 
 	if id == "" {
-		writeErrorJSON(http.StatusBadRequest, "id is required", rw)
+		writeErrorJSON(http.StatusBadRequest, "name is required", rw)
 		return
 	}
 
-	status, err := h.bench.Status(id)
+	status, err := h.bench.Status(name)
 	if err != nil {
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get status: %s", err), rw)
 		return
@@ -35,10 +35,10 @@ func (h *HTTPService) getAllBenchmarksHandler(rw http.ResponseWriter, r *http.Re
 }
 
 func (h *HTTPService) deleteBenchmarkHandler(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	id := ps.ByName("id")
+	id := ps.ByName("name")
 
 	if id == "" {
-		writeErrorJSON(http.StatusBadRequest, "id is required", rw)
+		writeErrorJSON(http.StatusBadRequest, "name is required", rw)
 		return
 	}
 
@@ -99,7 +99,7 @@ func validateSettings(settings *types.Settings) error {
 		return errors.New("settings cannot be nil")
 	}
 
-	if settings.Consumer == nil && settings.Producer == nil {
+	if settings.Read == nil && settings.Write == nil {
 		return errors.New("consumer, producer or both settings must be set")
 	}
 
