@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"regexp"
 
 	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/natssvc"
@@ -20,6 +21,10 @@ type HTTPService struct {
 	bench   *bench.Bench
 	version string
 }
+
+var (
+	validNameRegex = regexp.MustCompile(`^[a-z0-9_\-]+$`)
+)
 
 func New(params *cli.Params, n *natssvc.NATSService, b *bench.Bench, version string) (*HTTPService, error) {
 	if err := validateParams(params); err != nil {
@@ -52,8 +57,7 @@ func (h *HTTPService) Start() error {
 	router.HandlerFunc("GET", "/bench", h.getAllBenchmarksHandler)
 	router.Handle("GET", "/bench/:id", h.getBenchmarkHandler)
 	router.Handle("DELETE", "/bench/:id", h.deleteBenchmarkHandler)
-	router.Handle("PUT", "/bench/:id", h.updateBenchmarkHandler)
-	router.HandlerFunc("POST", "/create", h.createBenchmarkHandler)
+	router.HandlerFunc("POST", "/bench", h.createBenchmarkHandler)
 
 	router.HandlerFunc("GET", "/cluster", h.getClusterHandler)
 

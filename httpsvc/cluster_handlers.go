@@ -11,7 +11,7 @@ type GetClusterResponse struct {
 }
 
 func (h *HTTPService) getClusterHandler(rw http.ResponseWriter, r *http.Request) {
-	nodes, err := h.nats.GetParticipants()
+	nodes, err := h.nats.GetNodeList()
 	if err != nil {
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get cluster nodes: %v", err), rw)
 		return

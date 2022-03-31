@@ -5,40 +5,51 @@ import (
 )
 
 const (
-	SingleWriteStrategy WriteStrategy = "single"
-	SpreadWriteStrategy WriteStrategy = "spread"
-
 	SpreadReadStrategy ReadStrategy = "spread"
 	SharedReadStrategy ReadStrategy = "shared"
+
+	NoneConsumerGroupStrategy      ConsumerGroupStrategy = "none"
+	PerStreamConsumerGroupStrategy ConsumerGroupStrategy = "per_stream"
+	PerJobConsumerGroupStrategy    ConsumerGroupStrategy = "per_job"
 )
 
+type ReadStrategy string
+type ConsumerGroupStrategy string
+type JobStatus string
+
 type Settings struct {
-	Name        string         `json:"name,omitempty"`
+	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
-	NumStreams  int            `json:"num_streams"`
-	NumReplicas int            `json:"num_replicas"`
-	NumMessages int            `json:"num_messages"`
-	NumNodes    int            `json:"num_nodes"`
-	NumWorkers  int            `json:"num_workers"`
 	Write       *WriteSettings `json:"write"`
 	Read        *ReadSettings  `json:"read"`
 }
 
 type WriteSettings struct {
-	Strategy     WriteStrategy `json:"strategy"`
-	MsgSizeBytes int           `json:"msg_size_bytes"`
+	NumStreams   int  `json:"num_streams"`
+	NumMessages  int  `json:"num_messages"`
+	NumNodes     int  `json:"num_nodes"`
+	NumWorkers   int  `json:"num_workers"`
+	NumReplicas  int  `json:"num_replicas"`
+	MsgSizeBytes int  `json:"msg_size_bytes"`
+	KeepStreams  bool `json:"keep_streams"`
+
+	// Filled out by bench.CreateJobs
+	Subjects []string `json:"subjects"`
 }
 
 type ReadSettings struct {
-	Strategy              ReadStrategy          `json:"strategy"`
-	BatchSize             int                   `json:"batch_size"`
-	ConsumerGroupStrategy ConsumerGroupStrategy `json:"consumer_group_strategy"`
-}
+	NumStreams  int `json:"num_streams"`
+	NumMessages int `json:"num_messages"`
+	NumNodes    int `json:"num_nodes"`
+	NumWorkers  int `json:"num_workers"`
+	BatchSize   int `json:"batch_size"`
 
-type ReadStrategy string
-type WriteStrategy string
-type ConsumerGroupStrategy string
-type JobStatus string
+	Strategy              ReadStrategy          `json:"strategy"`
+	ConsumerGroupStrategy ConsumerGroupStrategy `json:"consumer_group_strategy"`
+
+	// Filled out by bench.CreateJobs
+	Streams []string `json:"streams"`
+}
 
 type Status struct {
 	Status          JobStatus     `json:"status"`
@@ -47,4 +58,14 @@ type Status struct {
 	TotalProcessed  int           `json:"total_processed,omitempty"`
 	StartedAt       time.Time     `json:"started_at"`
 	EndedAt         time.Time     `json:"ended_at"`
+}
+
+// ----------------------------------------------------------------------------
+
+type Job struct {
+	NodeID   string    `json:"node_id"`
+	Settings *Settings `json:"settings"`
+
+	CreatedBy string    `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
 }

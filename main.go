@@ -9,7 +9,6 @@ import (
 	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/httpsvc"
 	"github.com/batchcorp/njst/natssvc"
-	uuid "github.com/satori/go.uuid"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/alecthomas/kingpin.v2"
 
@@ -24,7 +23,7 @@ var (
 
 func init() {
 	kingpin.Flag("node-id", "Node ID").
-		Default(uuid.NewV4().String()).
+		Default(natssvc.RandID(8)).
 		Envar("NJST_NODE_ID").
 		StringVar(&params.NodeID)
 
@@ -85,7 +84,7 @@ func main() {
 		logrus.Fatal("Unable to setup NATS service: ", err)
 	}
 
-	b, err := bench.New(params)
+	b, err := bench.New(params, n)
 	if err != nil {
 		logrus.Fatal("Unable to setup benchmark service: ", err)
 	}
@@ -109,7 +108,7 @@ func main() {
 	// Give nats service time to start and register itself
 	time.Sleep(time.Second)
 
-	nodes, err := n.GetParticipants()
+	nodes, err := n.GetNodeList()
 	if err != nil {
 		logrus.Fatal("unable to determine cluster participants: ", err)
 	}
@@ -117,7 +116,6 @@ func main() {
 	logrus.Infof("NodeID:                       %s", params.NodeID)
 	logrus.Infof("HTTP server listening on:     %s", params.HTTPAddress)
 	logrus.Infof("Nodes in cluster:             %d", len(nodes))
-	logrus.Infof("HTTP API listening on:        %s", params.HTTPAddress)
 	logrus.Info("")
 	logrus.Info("njst ready!")
 

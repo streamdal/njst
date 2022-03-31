@@ -4,11 +4,11 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/batchcorp/njst/types"
@@ -101,6 +101,8 @@ func (n *NATSService) Start() error {
 	}()
 
 	for subject, handler := range n.subjectMap {
+		n.log.Debugf("subscribing to %s", subject)
+
 		sub, err := n.conn.Subscribe(subject, handler)
 		if err != nil {
 			return errors.Wrapf(err, "unable to subscribe to subject '%s'", subject)
@@ -131,66 +133,31 @@ func (n *NATSService) runHeartbeat() error {
 	return err
 }
 
-// SetupBench creates streams and consumers.
-// Returns bench specific settings that can be emitted via NATS.
-func (n *NATSService) SetupBench(httpSettings *types.Settings) ([]*types.NATSSettings, error) {
-	natsSettings := make([]*types.NATSSettings, 0)
-	streams := make([]string, 0)
+func (n *NATSService) EmitJobs(jobs []*types.Job) error {
+	if len(jobs) == 0 {
+		return errors.New("jobs are empty - nothing to emit")
+	}
 
-	// Create streams
-	for i := 0; i < httpSettings.NumStreams; i++ {
-		streamID := RandID(8)
-		streamName := fmt.Sprintf("NJST-%s-%s", httpSettings.BenchID, streamID)
-
-		if _, err := n.js.AddStream(&nats.StreamConfig{
-			Name:        streamName,
-			Description: "njst bench stream",
-			Subjects:    []string{strings.ToLower(streamName)},
-			Storage:     nats.MemoryStorage,
-			Replicas:    httpSettings.NumReplicas,
-		}); err != nil {
-			return nil, errors.Wrapf(err, "unable to create stream '%s': %s", streamName, err)
+	for _, j := range jobs {
+		data, err := json.Marshal(j)
+		if err != nil {
+			return errors.Wrapf(err, "unable to marshal job '%s': %s", j.Settings.Name, err)
 		}
 
-		streams = append(streams, streamName)
-	}
-
-	// Create consumers
-	if httpSettings.Read != nil {
-		for _, streamName := range streams {
-			consumerGroupName := "cg-" + streamName
-
-			if _, err := n.js.AddConsumer(streamName, &nats.ConsumerConfig{
-				Durable:     consumerGroupName,
-				Description: "njst consumer",
-			}); err != nil {
-				return nil, errors.Wrapf(err, "unable to create consumer for stream '%s': %s", streamName, err)
-			}
-
-			streams[streamName] = consumerGroupName
+		if err := n.conn.Publish(fmt.Sprintf("njst.%s.create", j.NodeID), data); err != nil {
+			return errors.Wrapf(err, "unable to publish job '%s' for node '%s': %s", j.Settings.Name, j.NodeID, err)
 		}
 	}
-
-	// Create producers
-	if httpSettings.Write != nil {
-
-	}
-
-	// Split streams across available nodes
-	streamsPerNode := httpSettings.NumStreams / httpSettings.NumNodes}
-
-
-
-	return streams, nil
-}
-
-func (n *NATSService) EmitCreateBenchmark(streams map[string]string, settings *types.Settings) error {
 
 	return nil
 }
 
 func (n *NATSService) RemoveHeartbeat() error {
 	return n.hkv.Delete(n.params.NodeID)
+}
+
+func (n *NATSService) AddStream(streamConfig *nats.StreamConfig) (*nats.StreamInfo, error) {
+	return n.js.AddStream(streamConfig)
 }
 
 // newConn creates a new Nats client connection
@@ -286,7 +253,7 @@ func generateTLSConfig(caCert, clientCert, clientKey string, skipVerify bool) (*
 	}, nil
 }
 
-func (n *NATSService) GetParticipants() ([]string, error) {
+func (n *NATSService) GetNodeList() ([]string, error) {
 	keys, err := n.hkv.Keys()
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to get heartbeat keys")
@@ -300,11 +267,14 @@ func RandID(length int) string {
 		length = 8
 	}
 
+	// fmt.Sprintf's %x prints two chars per byte
+	length = length / 2
+
 	b := make([]byte, length)
 
 	if _, err := rand.Read(b); err != nil {
 		panic(err)
 	}
 
-	return fmt.Sprintf("%X", b)
+	return fmt.Sprintf("%x", b)
 }
