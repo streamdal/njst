@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/batchcorp/njst/types"
@@ -20,18 +21,22 @@ import (
 )
 
 const (
+	HeaderJobName = "job_name"
+
 	HeartbeatBucket    = "njst-heartbeats"
 	ResultBucketPrefix = "njst-results"
 )
 
 type NATSService struct {
-	params     *cli.Params
-	conn       *nats.Conn
-	js         nats.JetStreamContext
-	hkv        nats.KeyValue
-	subs       map[string]*nats.Subscription
-	subjectMap map[string]nats.MsgHandler
-	log        *logrus.Entry
+	params       *cli.Params
+	conn         *nats.Conn
+	js           nats.JetStreamContext
+	hkv          nats.KeyValue
+	bucketsMutex *sync.RWMutex
+	buckets      map[string]nats.KeyValue
+	subs         map[string]*nats.Subscription
+	subjectMap   map[string]nats.MsgHandler
+	log          *logrus.Entry
 }
 
 func New(params *cli.Params) (*NATSService, error) {
@@ -75,20 +80,87 @@ func New(params *cli.Params) (*NATSService, error) {
 		js:     js,
 		hkv:    hkv,
 		params: params,
-		subs:   make(map[string]*nats.Subscription),
-		log:    logrus.WithField("pkg", "natssvc"),
-	}
-
-	n.subjectMap = map[string]nats.MsgHandler{
-		fmt.Sprintf("njst.%s.create", params.NodeID): n.createHandler,
-		fmt.Sprintf("njst.%s.delete", params.NodeID): n.deleteHandler,
-		fmt.Sprintf("njst.%s.status", params.NodeID): n.statusHandler,
+		buckets: map[string]nats.KeyValue{
+			HeartbeatBucket: hkv,
+		},
+		bucketsMutex: &sync.RWMutex{},
+		subs:         make(map[string]*nats.Subscription),
+		log:          logrus.WithField("pkg", "natssvc"),
 	}
 
 	return n, nil
 }
 
-func (n *NATSService) Start() error {
+func (n *NATSService) CacheBucket(name string, bucket nats.KeyValue) {
+	n.bucketsMutex.Lock()
+	defer n.bucketsMutex.Unlock()
+
+	n.buckets[name] = bucket
+}
+
+func (n *NATSService) WriteStatus(status *types.Status) error {
+	if status == nil {
+		return errors.New("status cannot be nil")
+	}
+
+	if status.JobName == "" {
+		return errors.New("job name cannot be empty")
+	}
+
+	bucket, err := n.GetOrCreateBucket(ResultBucketPrefix, status.JobName)
+	if err != nil {
+		return errors.Wrapf(err, "unable to get bucket for job '%s'", status.JobName)
+	}
+
+	data, err := json.Marshal(status)
+	if err != nil {
+		return errors.Wrapf(err, "unable to marshal status for job '%s'", status.JobName)
+	}
+
+	if _, err := bucket.Put(status.NodeID, data); err != nil {
+		return errors.Wrapf(err, "unable to write status for job '%s'", status.JobName)
+	}
+
+	return nil
+}
+
+func (n *NATSService) GetOrCreateBucket(prefix, jobName string) (nats.KeyValue, error) {
+	bucketName := fmt.Sprintf("%s-%s", prefix, jobName)
+
+	n.bucketsMutex.RLock()
+	bucket, ok := n.buckets[bucketName]
+	n.bucketsMutex.RUnlock()
+
+	if ok {
+		return bucket, nil
+	}
+
+	// Bucket not in memory, see if we need to create it
+	bucket, err := n.js.KeyValue(bucketName)
+	if err != nil {
+		if err == nats.ErrBucketNotFound {
+			// Create bucket
+			bucket, err = n.js.CreateKeyValue(&nats.KeyValueConfig{
+				Bucket:      bucketName,
+				Description: fmt.Sprintf("njst results for job '%s'", jobName),
+			})
+
+			if err != nil {
+				return nil, errors.Wrapf(err, "unable to create bucket for job '%s'", jobName)
+			}
+		} else {
+			return nil, errors.Wrapf(err, "unable to determine bucket status for job '%s'", jobName)
+		}
+	}
+
+	n.bucketsMutex.Lock()
+	n.buckets[bucketName] = bucket
+	n.bucketsMutex.Unlock()
+
+	return bucket, nil
+}
+
+func (n *NATSService) Start(msgHandlers map[string]nats.MsgHandler) error {
 	// Launch heartbeat
 	n.log.Debug("launching heartbeat")
 
@@ -100,7 +172,7 @@ func (n *NATSService) Start() error {
 		n.log.Debug("heartbeat exiting")
 	}()
 
-	for subject, handler := range n.subjectMap {
+	for subject, handler := range msgHandlers {
 		n.log.Debugf("subscribing to %s", subject)
 
 		sub, err := n.conn.Subscribe(subject, handler)
@@ -144,9 +216,23 @@ func (n *NATSService) EmitJobs(jobs []*types.Job) error {
 			return errors.Wrapf(err, "unable to marshal job '%s': %s", j.Settings.Name, err)
 		}
 
-		if err := n.conn.Publish(fmt.Sprintf("njst.%s.create", j.NodeID), data); err != nil {
+		if err := n.conn.PublishMsg(&nats.Msg{
+			Subject: fmt.Sprintf("njst.%s.create", j.NodeID),
+			Header: map[string][]string{
+				HeaderJobName: {j.Settings.Name},
+			},
+			Data: data,
+		}); err != nil {
 			return errors.Wrapf(err, "unable to publish job '%s' for node '%s': %s", j.Settings.Name, j.NodeID, err)
 		}
+	}
+
+	return nil
+}
+
+func (n *NATSService) Publish(subject string, data []byte) error {
+	if _, err := n.js.Publish(subject, data); err != nil {
+		return errors.Wrapf(err, "unable to publish msg to subj '%s'", subject)
 	}
 
 	return nil

@@ -9,6 +9,7 @@ import (
 	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/httpsvc"
 	"github.com/batchcorp/njst/natssvc"
+	"github.com/nats-io/nats.go"
 	"github.com/sirupsen/logrus"
 	"gopkg.in/alecthomas/kingpin.v2"
 
@@ -94,8 +95,15 @@ func main() {
 		logrus.Fatal("Unable to setup HTTP service: ", err)
 	}
 
+	msgHandlers := map[string]nats.MsgHandler{
+		"njst." + params.NodeID + ".create": b.CreateMsgHandler,
+		"njst." + params.NodeID + ".start":  b.StartMsgHandler,
+		"njst." + params.NodeID + ".stop":   b.StopMsgHandler,
+		"njst." + params.NodeID + ".delete": b.DeleteMsgHandler,
+	}
+
 	// Start services
-	if err := n.Start(); err != nil {
+	if err := n.Start(msgHandlers); err != nil {
 		logrus.Fatal("Unable to start NATS service: ", err)
 	}
 

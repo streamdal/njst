@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/batchcorp/njst/bench"
+	"github.com/batchcorp/njst/natssvc"
 	"github.com/batchcorp/njst/types"
 	"github.com/julienschmidt/httprouter"
 	"github.com/pkg/errors"
@@ -91,6 +92,18 @@ func (h *HTTPService) createBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create streams: %s", err), rw)
 		return
 	}
+
+	// Create result bucket
+	bucket, err := h.nats.GetOrCreateBucket(natssvc.ResultBucketPrefix, settings.Name)
+	if err != nil {
+		h.log.Errorf("unable to create result bucket: %s", err)
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create result bucket: %s", err), rw)
+		return
+	}
+
+	bucketName := fmt.Sprintf("%s-%s", natssvc.ResultBucketPrefix, settings.Name)
+
+	h.nats.CacheBucket(bucketName, bucket)
 
 	if err := h.nats.EmitJobs(jobs); err != nil {
 		h.log.Errorf("unable to emit jobs: %s", err)
@@ -192,6 +205,18 @@ func validateWriteSettings(ws *types.WriteSettings) error {
 
 	if ws.MsgSizeBytes < 1 {
 		ws.MsgSizeBytes = bench.DefaultMsgSizeBytes
+	}
+
+	if ws.NumMessages == 0 {
+		ws.NumMessages = bench.DefaultNumMessages
+	}
+
+	if ws.NumMessages < ws.NumWorkers {
+		return errors.New("num messages must be greater than or equal to num workers")
+	}
+
+	if ws.NumStreams < ws.NumWorkers {
+		return errors.New("num streams must be greater than or equal to num workers")
 	}
 
 	return nil

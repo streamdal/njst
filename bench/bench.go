@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"crypto/rand"
 	"fmt"
 	"sync"
 	"time"
@@ -75,11 +76,7 @@ func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
 	}, nil
 }
 
-func (b *Bench) Create(settings *types.Settings) (string, error) {
-	return "", nil
-}
-
-func (b *Bench) Delete(id string) error {
+func (b *Bench) Delete(name string) error {
 	return nil
 }
 
@@ -304,4 +301,14 @@ func validateProducerSettings(settings *types.Settings) error {
 	}
 
 	return nil
+}
+
+func GenRandomBytes(size int) ([]byte, error) {
+	data := make([]byte, size)
+
+	if _, err := rand.Read(data); err != nil {
+		return nil, err
+	}
+
+	return data, nil
 }

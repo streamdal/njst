@@ -11,6 +11,10 @@ const (
 	NoneConsumerGroupStrategy      ConsumerGroupStrategy = "none"
 	PerStreamConsumerGroupStrategy ConsumerGroupStrategy = "per_stream"
 	PerJobConsumerGroupStrategy    ConsumerGroupStrategy = "per_job"
+
+	InProgressStatus JobStatus = "in-progress"
+	ErrorStatus      JobStatus = "error"
+	CompletedStatus  JobStatus = "completed"
 )
 
 type ReadStrategy string
@@ -52,12 +56,16 @@ type ReadSettings struct {
 }
 
 type Status struct {
-	Status          JobStatus     `json:"status"`
-	ElapsedDuration time.Duration `json:"elapsed_duration,omitempty"`
-	AvgMsgPerSec    float64       `json:"avg_msg_per_sec,omitempty"`
-	TotalProcessed  int           `json:"total_processed,omitempty"`
-	StartedAt       time.Time     `json:"started_at"`
-	EndedAt         time.Time     `json:"ended_at"`
+	Status         JobStatus `json:"status"`
+	Message        string    `json:"message,omitempty"`
+	JobName        string    `json:"job_name"`
+	NodeID         string    `json:"node_id"`
+	ElapsedSeconds float64   `json:"elapsed_seconds,omitempty"`
+	AvgMsgPerSec   float64   `json:"avg_msg_per_sec,omitempty"`
+	TotalProcessed int       `json:"total_processed,omitempty"`
+	TotalErrors    int       `json:"total_errors,omitempty"`
+	StartedAt      time.Time `json:"started_at"`
+	EndedAt        time.Time `json:"ended_at"`
 }
 
 // ----------------------------------------------------------------------------
