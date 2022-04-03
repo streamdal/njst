@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strings"
 
 	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/natssvc"
@@ -14,31 +15,51 @@ import (
 )
 
 func (h *HTTPService) getBenchmarkHandler(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	name := ps.ByName("name")
+	id := ps.ByName("id")
 
-	if name == "" {
-		writeErrorJSON(http.StatusBadRequest, "name is required", rw)
+	if id == "" {
+		writeErrorJSON(http.StatusBadRequest, "id is required", rw)
 		return
 	}
 
-	status, err := h.bench.Status(name)
+	status, err := h.bench.Status(id)
 	if err != nil {
+		if strings.Contains(err.Error(), "unable to get") {
+			writeErrorJSON(http.StatusNotFound, err.Error(), rw)
+			return
+		}
+
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get status: %s", err), rw)
 		return
 	}
 
-	writeJSON(http.StatusOK, status, rw)
+	settings, err := h.nats.GetSettings(id)
+	if err != nil {
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get settings: %s", err), rw)
+		return
+	}
+
+	writeJSON(http.StatusOK, &types.StatusResponse{
+		Status:   status,
+		Settings: settings,
+	}, rw)
 }
 
 func (h *HTTPService) getAllBenchmarksHandler(rw http.ResponseWriter, r *http.Request) {
-	// Go through results in NATS?
+	allSettings, err := h.nats.GetAllSettings()
+	if err != nil {
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get settings: %s", err), rw)
+		return
+	}
+
+	writeJSON(http.StatusOK, allSettings, rw)
 }
 
 func (h *HTTPService) deleteBenchmarkHandler(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
-	id := ps.ByName("name")
+	id := ps.ByName("id")
 
 	if id == "" {
-		writeErrorJSON(http.StatusBadRequest, "name is required", rw)
+		writeErrorJSON(http.StatusBadRequest, "id is required", rw)
 		return
 	}
 
@@ -47,7 +68,9 @@ func (h *HTTPService) deleteBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 		return
 	}
 
-	rw.WriteHeader(http.StatusNoContent)
+	writeJSON(http.StatusOK, map[string]string{
+		"message": "deleted benchmark",
+	}, rw)
 }
 
 func (h *HTTPService) createBenchmarkHandler(rw http.ResponseWriter, r *http.Request) {
@@ -73,20 +96,10 @@ func (h *HTTPService) createBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Does this name already exist?
-	exists, err := h.bench.Exists(settings.Name)
-	if err != nil {
-		writeErrorJSON(http.StatusBadRequest, fmt.Sprintf("unable to verify if benchmark '%s' exists: %s", settings.Name, err), rw)
-		return
-	}
-
-	if exists {
-		writeErrorJSON(http.StatusBadRequest, fmt.Sprintf("benchmark '%s' already exists", settings.Name), rw)
-		return
-	}
+	settings.ID = RandString(8)
 
 	// A single node should
-	jobs, err := h.bench.CreateJobs(settings)
+	jobs, err := h.bench.GenerateCreateJobs(settings)
 	if err != nil {
 		h.log.Errorf("unable to create streams: %s", err)
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create streams: %s", err), rw)
@@ -94,25 +107,32 @@ func (h *HTTPService) createBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 	}
 
 	// Create result bucket
-	bucket, err := h.nats.GetOrCreateBucket(natssvc.ResultBucketPrefix, settings.Name)
+	bucket, err := h.nats.GetOrCreateBucket(natssvc.ResultBucketPrefix, settings.ID)
 	if err != nil {
 		h.log.Errorf("unable to create result bucket: %s", err)
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create result bucket: %s", err), rw)
 		return
 	}
 
-	bucketName := fmt.Sprintf("%s-%s", natssvc.ResultBucketPrefix, settings.Name)
+	bucketName := fmt.Sprintf("%s-%s", natssvc.ResultBucketPrefix, settings.ID)
 
 	h.nats.CacheBucket(bucketName, bucket)
 
-	if err := h.nats.EmitJobs(jobs); err != nil {
+	if err := h.nats.EmitJobs(types.CreateJob, jobs); err != nil {
 		h.log.Errorf("unable to emit jobs: %s", err)
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to emit create benchmark: %s", err), rw)
 		return
 	}
 
+	if err := h.nats.SaveSettings(settings); err != nil {
+		h.log.Errorf("unable to save settings: %s", err)
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to save settings: %s", err), rw)
+		return
+	}
+
 	writeJSON(http.StatusOK, map[string]string{
-		"message": fmt.Sprintf("benchmark '%s' created successfully", settings.Name),
+		"id":      settings.ID,
+		"message": "benchmark created successfully",
 	}, rw)
 }
 
@@ -123,14 +143,6 @@ func validateSettings(settings *types.Settings) error {
 
 	if settings.Read == nil && settings.Write == nil {
 		return errors.New("read or write settings must be set")
-	}
-
-	if settings.Name == "" {
-		return errors.New("name must be set")
-	}
-
-	if !validNameRegex.MatchString(settings.Name) {
-		return errors.New("name must be [a-z0-9-_]")
 	}
 
 	if settings.Read != nil {
@@ -157,8 +169,8 @@ func validateReadSettings(rs *types.ReadSettings) error {
 		rs.NumStreams = bench.DefaultNumStreams
 	}
 
-	if rs.NumWorkers < 1 {
-		rs.NumWorkers = bench.DefaultNumWorkers
+	if rs.NumWorkersPerStream < 1 {
+		rs.NumWorkersPerStream = bench.DefaultNumWorkersPerStream
 	}
 
 	if rs.BatchSize < 1 {
@@ -183,8 +195,8 @@ func validateReadSettings(rs *types.ReadSettings) error {
 		}
 	}
 
-	if rs.NumMessages < 1 {
-		rs.NumMessages = bench.DefaultNumMessages
+	if rs.NumMessagesPerStream < 1 {
+		rs.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
 	}
 
 	return nil
@@ -199,24 +211,16 @@ func validateWriteSettings(ws *types.WriteSettings) error {
 		ws.NumStreams = bench.DefaultNumStreams
 	}
 
-	if ws.NumWorkers < 1 {
-		ws.NumWorkers = bench.DefaultNumWorkers
+	if ws.NumWorkersPerStream < 1 {
+		ws.NumWorkersPerStream = bench.DefaultNumWorkersPerStream
 	}
 
 	if ws.MsgSizeBytes < 1 {
 		ws.MsgSizeBytes = bench.DefaultMsgSizeBytes
 	}
 
-	if ws.NumMessages == 0 {
-		ws.NumMessages = bench.DefaultNumMessages
-	}
-
-	if ws.NumMessages < ws.NumWorkers {
-		return errors.New("num messages must be greater than or equal to num workers")
-	}
-
-	if ws.NumStreams < ws.NumWorkers {
-		return errors.New("num streams must be greater than or equal to num workers")
+	if ws.NumMessagesPerStream == 0 {
+		ws.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
 	}
 
 	return nil

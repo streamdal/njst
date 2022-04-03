@@ -97,8 +97,6 @@ func main() {
 
 	msgHandlers := map[string]nats.MsgHandler{
 		"njst." + params.NodeID + ".create": b.CreateMsgHandler,
-		"njst." + params.NodeID + ".start":  b.StartMsgHandler,
-		"njst." + params.NodeID + ".stop":   b.StopMsgHandler,
 		"njst." + params.NodeID + ".delete": b.DeleteMsgHandler,
 	}
 

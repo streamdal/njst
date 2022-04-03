@@ -6,17 +6,19 @@ import (
 
 	"github.com/batchcorp/njst/types"
 	"github.com/pkg/errors"
+	"github.com/sirupsen/logrus"
 )
 
 type WriteStatus struct {
 	WorkerID   int
 	NumWritten int
 	NumErrors  int
+	Errors     []string
 	StartedAt  time.Time
 	EndedAt    time.Time
 }
 
-func (b *Bench) runWriteBenchmark(jobName string, settings *types.Settings) (*types.Status, error) {
+func (b *Bench) runWriteBenchmark(settings *types.Settings) (*types.Status, error) {
 	stats := map[int]*WriteStatus{}
 
 	// Generate the data
@@ -29,67 +31,68 @@ func (b *Bench) runWriteBenchmark(jobName string, settings *types.Settings) (*ty
 
 	go b.runReporter(doneCh, settings, stats)
 
-	// Examples
-	//
-	// 4 streams, 4 workers, 1 message
-	// 4 streams, 1 worker, 4 messages < ---
-	// 1 stream, 4 workers, 1 message  < --- not possible caught in http handler - can't have numMessages < numWorkers
-	// 1 stream, 4 workers, 4 messages <--- less annoying to just not allow having less streams than workers
-	// 120 stream, 1 worker, 4 messages
-	// 120 streams, 4 workers, 1 message == 120 * 4 * 1 = 480 messages ==
-	numStreamsPerWorker := len(settings.Write.Subjects) / settings.Write.NumWorkers
-
-	lower := 0
 	wg := &sync.WaitGroup{}
 
+	numMessagesPerWorker := settings.Write.NumMessagesPerStream / settings.Write.NumWorkersPerStream
+	numMessagesPerLastWorker := numMessagesPerWorker + (settings.Write.NumMessagesPerStream % settings.Write.NumWorkersPerStream)
+
 	// Launch workers; last one gets remainder
-	for i := 0; i < settings.Write.NumWorkers; i++ {
-		wg.Add(1)
+	for _, subj := range settings.Write.Subjects {
+		for i := 0; i < settings.Write.NumWorkersPerStream; i++ {
+			stats[i] = &WriteStatus{
+				WorkerID:  i,
+				StartedAt: time.Now(),
+				Errors:    make([]string, 0),
+			}
 
-		upper := lower + numStreamsPerWorker
-		subjects := settings.Write.Subjects[lower:upper]
+			wg.Add(1)
 
-		// Last worker gets remainder
-		if i == settings.Write.NumWorkers-1 {
-			subjects = settings.Write.Subjects[lower:]
+			// Last worker gets remaining messages
+			if i == settings.Write.NumWorkersPerStream-1 {
+				go b.runWriterWorker(i, subj, data, numMessagesPerLastWorker, stats[i], wg)
+			} else {
+				go b.runWriterWorker(i, subj, data, numMessagesPerWorker, stats[i], wg)
+			}
 		}
-
-		stats[i] = &WriteStatus{
-			WorkerID:  i,
-			StartedAt: time.Now(),
-		}
-
-		go b.runWriterWorker(wg, i, stats[i], subjects, data, settings.Write.NumMessages)
-		lower = lower + numStreamsPerWorker
 	}
 
-	// Wait for workers to finish
+	// Wait for all workers to finish
 	wg.Wait()
 
-	// All workers finished; signal reporter to stop
-	close(doneCh)
+	// Stop the reporter
+	doneCh <- struct{}{}
 
 	// Calculate the final status
 	return b.calculateWriteStats(settings, stats, types.CompletedStatus), nil
 }
 
-func (b *Bench) runWriterWorker(wg *sync.WaitGroup, workerID int, stats *WriteStatus, subjects []string, data []byte, numMessages int) {
+func (b *Bench) runWriterWorker(workerID int, subj string, data []byte, numMessages int, stats *WriteStatus, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	for _, subj := range subjects {
-		for i := 0; i < numMessages; i++ {
-			err := b.nats.Publish(subj, data)
-			if err != nil {
-				b.log.Errorf("worker %d: unable to publish message: %s", workerID, err)
-				stats.NumErrors++
-				continue
-			}
+	llog := b.log.WithFields(logrus.Fields{
+		"worker_id":   workerID,
+		"subject":     subj,
+		"numMessages": numMessages,
+	})
 
-			stats.NumWritten++
+	llog.Debug("worker starting")
+
+	for i := 0; i < numMessages; i++ {
+		err := b.nats.Publish(subj, data)
+		if err != nil {
+			llog.Errorf("unable to publish message: %s", err)
+			stats.NumErrors++
+			stats.Errors = append(stats.Errors, err.Error())
+			continue
 		}
+
+		// Avoiding a lock here to speed things up
+		stats.NumWritten++
 	}
 
-	stats.EndedAt = time.Now()
+	llog.Debug("worker exiting")
+
+	stats.EndedAt = time.Now().Add(5 * time.Hour)
 }
 
 func (b *Bench) runReporter(doneCh chan struct{}, settings *types.Settings, stats map[int]*WriteStatus) {
@@ -108,14 +111,19 @@ MAIN:
 		}
 	}
 
-	b.log.Debugf("reporter exiting for job '%s'", settings.Name)
+	b.log.Debugf("reporter exiting for job '%s'", settings.ID)
 }
 
 func (b *Bench) calculateWriteStats(settings *types.Settings, stats map[int]*WriteStatus, jobStatus types.JobStatus) *types.Status {
-	var maxElapsed time.Duration
-	var maxStartedAt time.Time
-	var numWrittenTotal int
-	var numErrorsTotal int
+	var (
+		maxElapsed      time.Duration
+		maxStartedAt    time.Time
+		maxEndedAt      time.Time
+		numWrittenTotal int
+		numErrorsTotal  int
+	)
+
+	errs := make([]string, 0)
 
 	message := "benchmark is in progress"
 
@@ -134,19 +142,34 @@ func (b *Bench) calculateWriteStats(settings *types.Settings, stats map[int]*Wri
 			maxStartedAt = status.StartedAt
 		}
 
+		if status.EndedAt.After(maxEndedAt) {
+			maxEndedAt = status.EndedAt
+		}
+
 		numWrittenTotal += status.NumWritten
 		numErrorsTotal += status.NumErrors
+
+		if len(status.Errors) > 0 {
+			errs = append(errs, status.Errors...)
+		}
+	}
+
+	// Cap of errors
+	if len(errs) > 100 {
+		errs = errs[:100]
 	}
 
 	return &types.Status{
 		NodeID:         b.params.NodeID,
 		Status:         jobStatus,
 		Message:        message,
-		JobName:        settings.Name,
-		ElapsedSeconds: maxElapsed.Seconds(),
-		AvgMsgPerSec:   float64(numWrittenTotal) / maxElapsed.Seconds(),
+		Errors:         errs,
+		JobID:          settings.ID,
+		ElapsedSeconds: int(maxElapsed.Seconds()),
+		AvgMsgPerSec:   int(float64(numWrittenTotal) / maxElapsed.Seconds()),
 		TotalProcessed: numWrittenTotal,
 		TotalErrors:    numErrorsTotal,
 		StartedAt:      maxStartedAt,
+		EndedAt:        maxEndedAt,
 	}
 }

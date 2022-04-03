@@ -3,8 +3,9 @@ package httpsvc
 import (
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"net/http"
-	"regexp"
+	"time"
 
 	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/natssvc"
@@ -23,8 +24,12 @@ type HTTPService struct {
 }
 
 var (
-	validNameRegex = regexp.MustCompile(`^[a-z0-9_\-]+$`)
+	runes = []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
 )
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
 
 func New(params *cli.Params, n *natssvc.NATSService, b *bench.Bench, version string) (*HTTPService, error) {
 	if err := validateParams(params); err != nil {
@@ -100,4 +105,14 @@ func validateParams(params *cli.Params) error {
 	}
 
 	return nil
+}
+
+func RandString(n int) string {
+	b := make([]rune, n)
+
+	for i := range b {
+		b[i] = runes[rand.Intn(len(runes))]
+	}
+
+	return string(b)
 }
