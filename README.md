@@ -69,5 +69,3 @@ graph TD;
 5. All `njst` nodes send their results back via NATS
 6. All `njst` nodes listen for result completions and analyze the result
 7. Any `njst` node can now respond to a "status" HTTP call for a specific job
-
-
