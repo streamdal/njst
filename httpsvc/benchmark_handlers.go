@@ -63,13 +63,31 @@ func (h *HTTPService) deleteBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if err := h.bench.Delete(id); err != nil {
+	var (
+		deleteStreams  bool
+		deleteSettings bool
+		deleteResults  bool
+	)
+
+	if _, ok := r.URL.Query()["streams"]; ok {
+		deleteStreams = true
+	}
+
+	if _, ok := r.URL.Query()["settings"]; ok {
+		deleteSettings = true
+	}
+
+	if _, ok := r.URL.Query()["results"]; ok {
+		deleteResults = true
+	}
+
+	if err := h.bench.Delete(id, deleteStreams, deleteSettings, deleteResults); err != nil {
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to delete benchmark: %s", err), rw)
 		return
 	}
 
 	writeJSON(http.StatusOK, map[string]string{
-		"message": "deleted benchmark",
+		"message": "emitted benchmark deletion job",
 	}, rw)
 }
 

@@ -1,6 +1,7 @@
 package types
 
 import (
+	"context"
 	"time"
 )
 
@@ -87,4 +88,8 @@ type Job struct {
 
 	CreatedBy string    `json:"created_by"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// Set by bench.NewJob(jobID)
+	Context    context.Context    `json:"-"`
+	CancelFunc context.CancelFunc `json:"-"`
 }

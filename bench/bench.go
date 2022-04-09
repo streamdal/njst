@@ -39,13 +39,11 @@ var (
 )
 
 type Bench struct {
-	nats          *natssvc.NATSService
-	params        *cli.Params
-	producerMap   map[string]*Producer
-	consumerMap   map[string]*Consumer
-	producerMutex *sync.RWMutex
-	consumerMutex *sync.RWMutex
-	log           *logrus.Entry
+	nats      *natssvc.NATSService
+	params    *cli.Params
+	jobs      map[string]*types.Job
+	jobsMutex *sync.RWMutex
+	log       *logrus.Entry
 }
 
 type Producer struct {
@@ -66,17 +64,15 @@ func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
 	}
 
 	return &Bench{
-		params:        p,
-		nats:          nsvc,
-		producerMap:   make(map[string]*Producer),
-		consumerMap:   make(map[string]*Consumer),
-		producerMutex: &sync.RWMutex{},
-		consumerMutex: &sync.RWMutex{},
-		log:           logrus.WithField("pkg", "bench"),
+		params:    p,
+		nats:      nsvc,
+		jobs:      make(map[string]*types.Job),
+		jobsMutex: &sync.RWMutex{},
+		log:       logrus.WithField("pkg", "bench"),
 	}, nil
 }
 
-func (b *Bench) Delete(jobID string) error {
+func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResults bool) error {
 	// Create delete jobs
 	deleteJobs, err := b.GenerateDeleteJobs(jobID)
 	if err != nil {
@@ -89,13 +85,24 @@ func (b *Bench) Delete(jobID string) error {
 	}
 
 	// Delete settings
-	if err := b.nats.DeleteSettings(jobID); err != nil {
-		return errors.Wrap(err, "unable to delete settings")
+	if deleteSettings {
+		if err := b.nats.DeleteSettings(jobID); err != nil {
+			return errors.Wrap(err, "unable to delete settings")
+		}
 	}
 
 	// Delete results
-	if err := b.nats.DeleteResults(jobID); err != nil {
-		return errors.Wrap(err, "unable to delete results")
+	if deleteResults {
+		if err := b.nats.DeleteResults(jobID); err != nil {
+			return errors.Wrap(err, "unable to delete results")
+		}
+	}
+
+	// Delete streams
+	if deleteStreams {
+		if err := b.nats.DeleteStreams(jobID); err != nil {
+			return errors.Wrap(err, "unable to delete streams")
+		}
 	}
 
 	return nil

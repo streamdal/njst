@@ -1,10 +1,13 @@
 package bench
 
 import (
+	"context"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/batchcorp/njst/types"
+	"github.com/nats-io/nats.go"
 	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
@@ -18,27 +21,31 @@ type WriteStatus struct {
 	EndedAt    time.Time
 }
 
-func (b *Bench) runWriteBenchmark(settings *types.Settings) (*types.Status, error) {
+func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	stats := map[int]*WriteStatus{}
 
+	if job == nil || job.Settings == nil {
+		return nil, errors.New("job or job settings cannot be nil")
+	}
+
 	// Generate the data
-	data, err := GenRandomBytes(settings.Write.MsgSizeBytes)
+	data, err := GenRandomBytes(job.Settings.Write.MsgSizeBytes)
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to generate random data")
 	}
 
 	doneCh := make(chan struct{}, 1)
 
-	go b.runReporter(doneCh, settings, stats)
+	go b.runReporter(doneCh, job, stats)
 
 	wg := &sync.WaitGroup{}
 
-	numMessagesPerWorker := settings.Write.NumMessagesPerStream / settings.Write.NumWorkersPerStream
-	numMessagesPerLastWorker := numMessagesPerWorker + (settings.Write.NumMessagesPerStream % settings.Write.NumWorkersPerStream)
+	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
+	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 
 	// Launch workers; last one gets remainder
-	for _, subj := range settings.Write.Subjects {
-		for i := 0; i < settings.Write.NumWorkersPerStream; i++ {
+	for _, subj := range job.Settings.Write.Subjects {
+		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
 			stats[i] = &WriteStatus{
 				WorkerID:  i,
 				StartedAt: time.Now(),
@@ -48,10 +55,10 @@ func (b *Bench) runWriteBenchmark(settings *types.Settings) (*types.Status, erro
 			wg.Add(1)
 
 			// Last worker gets remaining messages
-			if i == settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(i, subj, data, numMessagesPerLastWorker, stats[i], wg)
+			if i == job.Settings.Write.NumWorkersPerStream-1 {
+				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerLastWorker, stats[i], wg)
 			} else {
-				go b.runWriterWorker(i, subj, data, numMessagesPerWorker, stats[i], wg)
+				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerWorker, stats[i], wg)
 			}
 		}
 	}
@@ -63,10 +70,10 @@ func (b *Bench) runWriteBenchmark(settings *types.Settings) (*types.Status, erro
 	doneCh <- struct{}{}
 
 	// Calculate the final status
-	return b.calculateWriteStats(settings, stats, types.CompletedStatus), nil
+	return b.calculateWriteStats(job.Settings, stats, types.CompletedStatus), nil
 }
 
-func (b *Bench) runWriterWorker(workerID int, subj string, data []byte, numMessages int, stats *WriteStatus, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, data []byte, numMessages int, stats *WriteStatus, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	llog := b.log.WithFields(logrus.Fields{
@@ -78,8 +85,13 @@ func (b *Bench) runWriterWorker(workerID int, subj string, data []byte, numMessa
 	llog.Debug("worker starting")
 
 	for i := 0; i < numMessages; i++ {
-		err := b.nats.Publish(subj, data)
+		err := b.nats.Publish(subj, data, nats.Context(ctx))
 		if err != nil {
+			if strings.Contains(err.Error(), "context canceled") {
+				llog.Debug("worker context cancelled - '%d' published, '%d' errors", stats.NumWritten, stats.NumErrors)
+				return
+			}
+
 			llog.Errorf("unable to publish message: %s", err)
 			stats.NumErrors++
 			stats.Errors = append(stats.Errors, err.Error())
@@ -95,15 +107,18 @@ func (b *Bench) runWriterWorker(workerID int, subj string, data []byte, numMessa
 	stats.EndedAt = time.Now().Add(5 * time.Hour)
 }
 
-func (b *Bench) runReporter(doneCh chan struct{}, settings *types.Settings, stats map[int]*WriteStatus) {
+func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, stats map[int]*WriteStatus) {
 	// Emit status every 5 seconds
 	ticker := time.NewTicker(5 * time.Second)
 
 MAIN:
 	for {
 		select {
+		case <-job.Context.Done():
+			b.log.Warningf("context canceled - exiting reporter")
+			break MAIN
 		case <-ticker.C:
-			if err := b.nats.WriteStatus(b.calculateWriteStats(settings, stats, types.InProgressStatus)); err != nil {
+			if err := b.nats.WriteStatus(b.calculateWriteStats(job.Settings, stats, types.InProgressStatus)); err != nil {
 				b.log.Error("unable to write status", "error", err)
 			}
 		case <-doneCh:
@@ -111,7 +126,7 @@ MAIN:
 		}
 	}
 
-	b.log.Debugf("reporter exiting for job '%s'", settings.ID)
+	b.log.Debugf("reporter exiting for job '%s'", job.Settings.ID)
 }
 
 func (b *Bench) calculateWriteStats(settings *types.Settings, stats map[int]*WriteStatus, jobStatus types.JobStatus) *types.Status {

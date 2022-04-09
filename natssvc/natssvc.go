@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,15 +94,15 @@ func New(params *cli.Params) (*NATSService, error) {
 				if err != nil {
 					return nil, errors.Wrap(err, "unable to create heartbeat bucket")
 				}
+			} else {
+				return nil, errors.Wrap(err, "unable to determine heartbeat bucket status")
 			}
-
-			return nil, errors.Wrap(err, "unable to determine heartbeat bucket status")
 		}
 
 		internalBuckets[b.Name] = kv
 	}
 
-	n := &NATSService{
+	return &NATSService{
 		conn:         c,
 		js:           js,
 		params:       params,
@@ -109,9 +110,7 @@ func New(params *cli.Params) (*NATSService, error) {
 		bucketsMutex: &sync.RWMutex{},
 		subs:         make(map[string]*nats.Subscription),
 		log:          logrus.WithField("pkg", "natssvc"),
-	}
-
-	return n, nil
+	}, nil
 }
 
 func (n *NATSService) CacheBucket(name string, bucket nats.KeyValue) {
@@ -273,15 +272,27 @@ func (n *NATSService) EmitJobs(jobType types.JobType, jobs []*types.Job) error {
 
 func (n *NATSService) DeleteSettings(id string) error {
 	if err := n.buckets[SettingsBucket].Delete(id); err != nil {
-		return errors.Wrapf(err, "unable to delete settings for id '%s'", id)
+		return errors.Wrapf(err, "unable to delete settings for job id '%s'", id)
+	}
+
+	return nil
+}
+
+func (n *NATSService) DeleteStreams(jobID string) error {
+	for streamName := range n.js.StreamNames() {
+		if strings.Contains(streamName, fmt.Sprintf("njst-%s-", jobID)) {
+			if err := n.js.DeleteStream(streamName); err != nil {
+				return errors.Wrapf(err, "unable to delete stream '%s'", streamName)
+			}
+		}
 	}
 
 	return nil
 }
 
 func (n *NATSService) DeleteResults(id string) error {
-	if err := n.js.DeleteStream(id); err != nil {
-		return errors.Wrapf(err, "unable to delete results for job '%s'", id)
+	if err := n.js.DeleteKeyValue(ResultBucketPrefix + "-" + id); err != nil {
+		return errors.Wrapf(err, "unable to delete results for job id '%s'", id)
 	}
 
 	return nil
@@ -434,12 +445,16 @@ func (n *NATSService) GetSettings(id string) (*types.Settings, error) {
 }
 
 func (n *NATSService) GetAllSettings() ([]*types.Settings, error) {
+	settingsList := make([]*types.Settings, 0)
+
 	keys, err := n.buckets[SettingsBucket].Keys()
 	if err != nil {
+		if err == nats.ErrNoKeysFound {
+			return settingsList, nil
+		}
+
 		return nil, errors.Wrap(err, "unable to get settings keys")
 	}
-
-	var settingsList []*types.Settings
 
 	for _, key := range keys {
 		settings, err := n.GetSettings(key)

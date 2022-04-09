@@ -25,7 +25,8 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 		"node_id": b.params.NodeID,
 	})
 
-	job := &types.Job{}
+	job := b.newJob(jobID)
+	defer b.deleteJob(jobID)
 
 	if err := json.Unmarshal(msg.Data, job); err != nil {
 		b.ReportError(jobID, fmt.Sprintf("Error unmarshalling settings: %v", err))
@@ -33,17 +34,15 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 		return
 	}
 
-	settings := job.Settings
-
-	llog.Debugf("starting job; settings %+v", settings)
+	llog.Debugf("starting job; settings %+v", job.Settings)
 
 	var status *types.Status
 	var err error
 
-	if settings.Write != nil {
-		status, err = b.runWriteBenchmark(settings)
-	} else if settings.Read != nil {
-		status, err = b.runReadBenchmark(settings)
+	if job.Settings.Write != nil {
+		status, err = b.runWriteBenchmark(job)
+	} else if job.Settings.Read != nil {
+		status, err = b.runReadBenchmark(job)
 	} else {
 		b.ReportError(jobID, "unrecognized job type - both read and write are nil")
 		return
@@ -54,9 +53,8 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 		return
 	}
 
-	// Send final status to nats result bucket
 	if err := b.nats.WriteStatus(status); err != nil {
-		llog.Errorf("unable to write result status: %s", err)
+		llog.Debugf("unable to write final result status: %s", err)
 	}
 
 	llog.Debugf("job '%s' on node '%s' finished", jobID, b.params.NodeID)
@@ -72,15 +70,28 @@ func (b *Bench) DeleteMsgHandler(msg *nats.Msg) {
 	}
 
 	llog := b.log.WithFields(logrus.Fields{
-		"func":    "CreateMsgHandler",
+		"func":    "DeleteMsgHandler",
 		"job_id":  jobID,
 		"node_id": b.params.NodeID,
 	})
 
+	// Is this job running?
+	job, ok := b.getJob(jobID)
+	if !ok {
+		b.log.Debugf("job '%s' not found on node '%s' - nothing to do", jobID, b.params.NodeID)
+		return
+	}
+
 	// We don't need to unmarshal the job since we already have the id
 	llog.Debugf("deleting job '%s' on node '%s'", jobID, b.params.NodeID)
 
-	// Is this job running?
+	// Cancel running reporter + worker(s)
+	job.CancelFunc()
+
+	// Delete job from mem
+	b.deleteJob(jobID)
+
+	b.log.Debugf("job '%s' on node '%s' deleted", jobID, b.params.NodeID)
 }
 
 func (b *Bench) ReportError(jobID, msg string) {
