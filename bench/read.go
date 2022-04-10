@@ -92,7 +92,7 @@ func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID in
 			stats.NumErrors++
 
 			if stats.NumErrors > job.Settings.Read.NumMessagesPerStream {
-				llog.Errorf("worker exiting prematurely due to too many errors")
+				llog.Error("worker exiting prematurely due to too many errors")
 				break
 			}
 

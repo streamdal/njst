@@ -68,8 +68,8 @@ type Status struct {
 	Errors         []string  `json:"errors,omitempty"`
 	JobID          string    `json:"job_id"`
 	NodeID         string    `json:"node_id"`
-	ElapsedSeconds int       `json:"elapsed_seconds"`
-	AvgMsgPerSec   int       `json:"avg_msg_per_sec"`
+	ElapsedSeconds float64   `json:"elapsed_seconds"`
+	AvgMsgPerSec   float64   `json:"avg_msg_per_sec"`
 	TotalProcessed int       `json:"total_processed"`
 	TotalErrors    int       `json:"total_errors"`
 	StartedAt      time.Time `json:"started_at"`

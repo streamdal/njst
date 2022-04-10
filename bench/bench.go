@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -144,14 +145,18 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 			finalStatus.EndedAt = s.EndedAt
 		}
 
-		avgMsgPerSec := finalStatus.TotalProcessed / finalStatus.ElapsedSeconds
+		avgMsgPerSec := float64(finalStatus.TotalProcessed) / finalStatus.ElapsedSeconds
 
+		// If we don't have a message rate yet, set it to the first one we get
 		if finalStatus.AvgMsgPerSec == 0 {
 			finalStatus.AvgMsgPerSec = avgMsgPerSec
 		} else {
 			finalStatus.AvgMsgPerSec = (finalStatus.AvgMsgPerSec + avgMsgPerSec) / 2
 		}
 	}
+
+	finalStatus.ElapsedSeconds = round(finalStatus.ElapsedSeconds, 2)
+	finalStatus.AvgMsgPerSec = round(finalStatus.AvgMsgPerSec, 2)
 
 	return finalStatus, nil
 }
@@ -490,4 +495,10 @@ func GenRandomBytes(size int) ([]byte, error) {
 	}
 
 	return data, nil
+}
+
+func round(f float64, places int) float64 {
+	pow := math.Pow(10., float64(places))
+	rounded := float64(int(f*pow)) / pow
+	return rounded
 }

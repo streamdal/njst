@@ -95,6 +95,12 @@ func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, 
 
 			llog.Errorf("unable to publish message: %s", err)
 			stats.NumErrors++
+
+			if stats.NumErrors > numMessages {
+				llog.Error("worker exiting prematurely due to too many errors")
+				break
+			}
+
 			stats.Errors = append(stats.Errors, err.Error())
 			continue
 		}
@@ -180,14 +186,16 @@ func (b *Bench) calculateStats(settings *types.Settings, stats map[int]*WorkerSt
 		errs = errs[:100]
 	}
 
+	avgMsgPerSec := float64(numProcessed) / maxElapsed.Seconds()
+
 	return &types.Status{
 		NodeID:         b.params.NodeID,
 		Status:         jobStatus,
 		Message:        message + msg,
 		Errors:         errs,
 		JobID:          settings.ID,
-		ElapsedSeconds: int(maxElapsed.Seconds()),
-		AvgMsgPerSec:   int(float64(numProcessed) / maxElapsed.Seconds()),
+		ElapsedSeconds: maxElapsed.Seconds(),
+		AvgMsgPerSec:   avgMsgPerSec,
 		TotalProcessed: numProcessed,
 		TotalErrors:    numErrorsTotal,
 		StartedAt:      maxStartedAt,
