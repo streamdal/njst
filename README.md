@@ -3,6 +3,9 @@
 `njst` is a [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) 
 _distributed_ benchmark and testing tool.
 
+NOTE: While benchmarks are dumb, this will at least give you a _general_ idea on
+what your NATS cluster is capable of.
+
 ## Features
 
 * Distributed by default
@@ -11,22 +14,25 @@ _distributed_ benchmark and testing tool.
 * Simple HTTP REST'ish API for job control
 * Ability to perform *massively parallel* tests to simulate real stress
 
+## Usage
+
+1. Modify and use the following [k8s deploy config]() to deploy `nsjt` instance(s)
+   to your kubernetes cluster.
+    1. `kubectl apply -f nsjt-deploy.yaml`
+2. Talk to any of the `njst` nodes via the [HTTP API](docs/api.md) to manage jobs
+
+
 ## Why?
 
 When evaluating a new technology such as a message bus/queue, in addition to
-single node read/write performance, you'll probably want to perform a 
-"real-world"-like test to see how your cluster behaves.
+single node read/write performance, you'll probably want to also perform 
+"real-world"-like tests to see how your cluster behaves.
 
 NATS Jetstream is _amazing_ but aside from using `ncli bench` to perform basic
 read/write tests, we wanted to be extra sure that we know how NATS will perform
-in production (without updating our entire stack).
+in production (without updating our entire stack). 
 
-## How?
-
-1. Modify and use the following [k8s deploy config]() to deploy `nsjt` instance(s)
-to your kubernetes cluster.
-    1. `kubectl apply -f nsjt-deploy.yaml`
-2. Talk to any of the `njst` nodes via the HTTP API to manage jobs
+This is why we created `njst`.
 
 ## You Should Know
 
@@ -63,5 +69,3 @@ graph TD;
 5. All `njst` nodes send their results back via NATS KV
 6. All `njst` nodes listen for result completions in result KV and analyze the result
 7. Any `njst` node can now respond to a "status" HTTP call for a specific job
-
-

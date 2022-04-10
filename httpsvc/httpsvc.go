@@ -3,8 +3,12 @@ package httpsvc
 import (
 	"encoding/json"
 	"errors"
+	"math/rand"
 	"net/http"
+	"time"
 
+	"github.com/batchcorp/njst/bench"
+	"github.com/batchcorp/njst/natssvc"
 	"github.com/julienschmidt/httprouter"
 	"github.com/sirupsen/logrus"
 
@@ -14,18 +18,38 @@ import (
 type HTTPService struct {
 	params  *cli.Params
 	log     *logrus.Entry
+	nats    *natssvc.NATSService
+	bench   *bench.Bench
 	version string
 }
 
-func New(params *cli.Params, version string) (*HTTPService, error) {
+var (
+	runes = []rune("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+)
+
+func init() {
+	rand.Seed(time.Now().UnixNano())
+}
+
+func New(params *cli.Params, n *natssvc.NATSService, b *bench.Bench, version string) (*HTTPService, error) {
 	if err := validateParams(params); err != nil {
 		return nil, err
+	}
+
+	if n == nil {
+		return nil, errors.New("nats service cannot be nil")
+	}
+
+	if b == nil {
+		return nil, errors.New("bench cannot be nil")
 	}
 
 	return &HTTPService{
 		params:  params,
 		log:     logrus.WithField("pkg", "httpsvc"),
 		version: version,
+		nats:    n,
+		bench:   b,
 	}, nil
 }
 
@@ -36,8 +60,8 @@ func (h *HTTPService) Start() error {
 	router.HandlerFunc("GET", "/version", h.versionHandler)
 
 	router.HandlerFunc("GET", "/bench", h.getAllBenchmarksHandler)
-	router.HandlerFunc("GET", "/bench/:id", h.getBenchmarkHandler)
-	router.HandlerFunc("DELETE", "/bench/:id", h.deleteBenchmarkHandler)
+	router.Handle("GET", "/bench/:id", h.getBenchmarkHandler)
+	router.Handle("DELETE", "/bench/:id", h.deleteBenchmarkHandler)
 	router.HandlerFunc("POST", "/bench", h.createBenchmarkHandler)
 
 	router.HandlerFunc("GET", "/cluster", h.getClusterHandler)
@@ -81,4 +105,14 @@ func validateParams(params *cli.Params) error {
 	}
 
 	return nil
+}
+
+func RandString(n int) string {
+	b := make([]rune, n)
+
+	for i := range b {
+		b[i] = runes[rand.Intn(len(runes))]
+	}
+
+	return string(b)
 }

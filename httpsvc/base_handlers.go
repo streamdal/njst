@@ -4,13 +4,13 @@ import (
 	"net/http"
 )
 
-func (h *HTTPService) healthCheckHandler(wr http.ResponseWriter, r *http.Request) {
+func (h *HTTPService) healthCheckHandler(rw http.ResponseWriter, r *http.Request) {
 	status := http.StatusOK
 	body := "ok"
 
-	wr.WriteHeader(status)
+	rw.WriteHeader(status)
 
-	if _, err := wr.Write([]byte(body)); err != nil {
+	if _, err := rw.Write([]byte(body)); err != nil {
 		h.log.Errorf("unable to write health output: %s", err)
 	}
 }
