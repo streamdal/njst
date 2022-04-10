@@ -194,6 +194,10 @@ func validateReadSettings(rs *types.ReadSettings) error {
 		rs.BatchSize = bench.DefaultBatchSize
 	}
 
+	if rs.BatchSize > rs.NumMessagesPerStream {
+		return errors.New("batch size cannot be greater than num messages per stream")
+	}
+
 	if rs.NumMessagesPerStream < 1 {
 		rs.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
 	}

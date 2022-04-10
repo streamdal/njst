@@ -44,12 +44,12 @@ type ReadSettings struct {
 
 	NumStreams           int `json:"num_streams"`
 	NumNodes             int `json:"num_nodes"`
-	NumMessagesPerStream int `json:"num_messages"`
-	NumWorkersPerStream  int `json:"num_workers"`
+	NumMessagesPerStream int `json:"num_messages_per_stream"`
+	NumWorkersPerStream  int `json:"num_workers_per_stream"`
 	BatchSize            int `json:"batch_size"`
 
 	// Filled out by bench.GenerateCreateJobs
-	Streams []*StreamInfo `json:"streams"`
+	Streams []*StreamInfo `json:"streams,omitempty"`
 }
 
 type StreamInfo struct {

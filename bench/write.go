@@ -12,9 +12,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-type WriteStatus struct {
+type WorkerStats struct {
 	WorkerID   int
 	NumWritten int
+	NumRead    int
 	NumErrors  int
 	Errors     []string
 	StartedAt  time.Time
@@ -22,7 +23,7 @@ type WriteStatus struct {
 }
 
 func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
-	stats := map[int]*WriteStatus{}
+	stats := map[int]*WorkerStats{}
 
 	if job == nil || job.Settings == nil {
 		return nil, errors.New("job or job settings cannot be nil")
@@ -46,7 +47,7 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
-			stats[i] = &WriteStatus{
+			stats[i] = &WorkerStats{
 				WorkerID:  i,
 				StartedAt: time.Now(),
 				Errors:    make([]string, 0),
@@ -70,10 +71,10 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	doneCh <- struct{}{}
 
 	// Calculate the final status
-	return b.calculateWriteStats(job.Settings, stats, types.CompletedStatus), nil
+	return b.calculateStats(job.Settings, stats, types.CompletedStatus, "; final"), nil
 }
 
-func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, data []byte, numMessages int, stats *WriteStatus, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, data []byte, numMessages int, stats *WorkerStats, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	llog := b.log.WithFields(logrus.Fields{
@@ -104,10 +105,10 @@ func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, 
 
 	llog.Debug("worker exiting")
 
-	stats.EndedAt = time.Now().Add(5 * time.Hour)
+	stats.EndedAt = time.Now()
 }
 
-func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, stats map[int]*WriteStatus) {
+func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, stats map[int]*WorkerStats) {
 	// Emit status every 5 seconds
 	ticker := time.NewTicker(5 * time.Second)
 
@@ -118,7 +119,7 @@ MAIN:
 			b.log.Warningf("context canceled - exiting reporter")
 			break MAIN
 		case <-ticker.C:
-			if err := b.nats.WriteStatus(b.calculateWriteStats(job.Settings, stats, types.InProgressStatus)); err != nil {
+			if err := b.nats.WriteStatus(b.calculateStats(job.Settings, stats, types.InProgressStatus, "; ticker")); err != nil {
 				b.log.Error("unable to write status", "error", err)
 			}
 		case <-doneCh:
@@ -129,13 +130,13 @@ MAIN:
 	b.log.Debugf("reporter exiting for job '%s'", job.Settings.ID)
 }
 
-func (b *Bench) calculateWriteStats(settings *types.Settings, stats map[int]*WriteStatus, jobStatus types.JobStatus) *types.Status {
+func (b *Bench) calculateStats(settings *types.Settings, stats map[int]*WorkerStats, jobStatus types.JobStatus, msg string) *types.Status {
 	var (
-		maxElapsed      time.Duration
-		maxStartedAt    time.Time
-		maxEndedAt      time.Time
-		numWrittenTotal int
-		numErrorsTotal  int
+		maxElapsed     time.Duration
+		maxStartedAt   time.Time
+		maxEndedAt     time.Time
+		numProcessed   int
+		numErrorsTotal int
 	)
 
 	errs := make([]string, 0)
@@ -161,7 +162,12 @@ func (b *Bench) calculateWriteStats(settings *types.Settings, stats map[int]*Wri
 			maxEndedAt = status.EndedAt
 		}
 
-		numWrittenTotal += status.NumWritten
+		if settings.Read != nil {
+			numProcessed += status.NumRead
+		} else if settings.Write != nil {
+			numProcessed += status.NumWritten
+		}
+
 		numErrorsTotal += status.NumErrors
 
 		if len(status.Errors) > 0 {
@@ -177,12 +183,12 @@ func (b *Bench) calculateWriteStats(settings *types.Settings, stats map[int]*Wri
 	return &types.Status{
 		NodeID:         b.params.NodeID,
 		Status:         jobStatus,
-		Message:        message,
+		Message:        message + msg,
 		Errors:         errs,
 		JobID:          settings.ID,
 		ElapsedSeconds: int(maxElapsed.Seconds()),
-		AvgMsgPerSec:   int(float64(numWrittenTotal) / maxElapsed.Seconds()),
-		TotalProcessed: numWrittenTotal,
+		AvgMsgPerSec:   int(float64(numProcessed) / maxElapsed.Seconds()),
+		TotalProcessed: numProcessed,
 		TotalErrors:    numErrorsTotal,
 		StartedAt:      maxStartedAt,
 		EndedAt:        maxEndedAt,

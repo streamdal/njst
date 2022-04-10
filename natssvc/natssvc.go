@@ -199,6 +199,10 @@ func (n *NATSService) GetOrCreateBucket(prefix, jobID string) (nats.KeyValue, er
 	return bucket, nil
 }
 
+func (n *NATSService) PullSubscribe(subj, consumerGroup string, opts ...nats.SubOpt) (*nats.Subscription, error) {
+	return n.js.PullSubscribe(subj, consumerGroup, opts...)
+}
+
 func (n *NATSService) Start(msgHandlers map[string]nats.MsgHandler) error {
 	// Launch heartbeat
 	n.log.Debug("launching heartbeat")

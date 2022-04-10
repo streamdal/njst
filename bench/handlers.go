@@ -34,7 +34,7 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 		return
 	}
 
-	llog.Debugf("starting job; settings %+v", job.Settings)
+	llog.Debugf("starting job; write settings %+v; read settings %+v", job.Settings.Write, job.Settings.Read)
 
 	var status *types.Status
 	var err error

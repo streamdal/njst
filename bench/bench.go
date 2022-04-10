@@ -31,14 +31,6 @@ type Bench struct {
 	log       *logrus.Entry
 }
 
-type Producer struct {
-	Settings *types.WriteSettings
-}
-
-type Consumer struct {
-	Settings *types.ReadSettings
-}
-
 func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
 	if err := validateParams(p); err != nil {
 		return nil, errors.Wrap(err, "unable to validate params")
@@ -109,6 +101,8 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 	finalStatus := &types.Status{}
 
 	for _, key := range keys {
+		b.log.Debugf("looking up results in bucket '%s', object '%s'", fullBucketName, key)
+
 		entry, err := bucket.Get(key)
 		if err != nil {
 			return nil, errors.Wrap(err, "unable to get k/v entry")
@@ -183,6 +177,7 @@ func (b *Bench) createConsumerGroups(settings *types.Settings, streams []string)
 		if _, err := b.nats.AddConsumer(streamName, &nats.ConsumerConfig{
 			Durable:     consumerGroupName,
 			Description: "njst consumer",
+			AckPolicy:   nats.AckAllPolicy, // TODO: This should be configurable
 		}); err != nil {
 			return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
 				consumerGroupName, streamName, err)
@@ -216,7 +211,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	}
 
 	// Do the streams exist?
-	streams := b.nats.GetStreams(settings.Read.WriteID)
+	streams := b.nats.GetStreams("njst-" + settings.Read.WriteID + "-")
 
 	if len(streams) < settings.Read.NumStreams {
 		return nil, errors.Errorf("%d streams requested but only %d available", settings.Read.NumStreams, len(streams))
@@ -279,9 +274,10 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 				ID:          settings.ID,
 				Description: settings.Description,
 				Read: &types.ReadSettings{
-					NumMessagesPerStream: settings.Write.NumMessagesPerStream,
-					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
+					NumMessagesPerStream: settings.Read.NumMessagesPerStream,
+					NumWorkersPerStream:  settings.Read.NumWorkersPerStream,
 					Streams:              generateStreams(startIndex, numStreams, streamInfo),
+					BatchSize:            settings.Read.BatchSize,
 				},
 			},
 			CreatedBy: b.params.NodeID,
@@ -380,6 +376,8 @@ func generateStreams(startIndex int, numStreams int, existingStreams []*types.St
 	streams := make([]*types.StreamInfo, 0)
 
 	for i := startIndex; i < numStreams; i++ {
+		logrus.Debugf("adding stream '%s' consumer group '%s'\n", existingStreams[i].StreamName, existingStreams[i].ConsumerGroupName)
+
 		streams = append(streams, &types.StreamInfo{
 			StreamName:        existingStreams[i].StreamName,
 			ConsumerGroupName: existingStreams[i].ConsumerGroupName,
