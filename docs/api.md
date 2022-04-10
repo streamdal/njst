@@ -41,7 +41,21 @@
       "message": "benchmark created successfully"
     }
 ```
-* **Sample request**:
+* **Sample READ request**:
+    ```json
+    {
+      "description": "medium read test",
+      "read": {
+        "write_id": "9iN0iDE8",
+        "num_nodes": 1,
+        "num_streams": 4,
+        "num_messages_per_stream": 10000,
+        "num_workers_per_stream": 1,
+        "batch_size": 1000
+      }
+    }
+    ```
+* **Sample WRITE request**:
     ```json
     {
       "description": "heavy write test",
