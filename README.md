@@ -3,8 +3,8 @@
 `njst` is a [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) 
 _distributed_ benchmark and testing tool.
 
-NOTE: While benchmarks are dumb, this will at least give you a _general_ idea on
-what your NATS cluster is capable of.
+NOTE: While benchmarks are dumb, this will at least give you a _general_ idea 
+about the performance capabilities of your NATS cluster.
 
 ## Features
 
@@ -12,13 +12,13 @@ what your NATS cluster is capable of.
 * No leader, no followers
 * Cloud native - works best in k8s
 * Simple HTTP REST'ish API for job control
-* Ability to perform *massively parallel* tests to simulate real stress
+* Ability to perform *massively parallel* tests to (attempt to) simulate real-world stress
 
 ## Usage
 
-1. Modify and use the following [k8s deploy config]() to deploy `nsjt` instance(s)
+1. Modify and use the following [k8s deploy config]() to deploy 3+ `nsjt` instance(s)
    to your kubernetes cluster.
-    1. `kubectl apply -f nsjt-deploy.yaml`
+    1. `kubectl apply -f njst-deploy.yaml`
 2. Talk to any of the `njst` nodes via the [HTTP API](docs/api.md) to manage jobs
 
 
@@ -28,11 +28,11 @@ When evaluating a new technology such as a message bus/queue, in addition to
 single node read/write performance, you'll probably want to also perform 
 "real-world"-like tests to see how your cluster behaves.
 
-NATS Jetstream is _amazing_ but aside from using `ncli bench` to perform basic
-read/write tests, we wanted to be extra sure that we know how NATS will perform
-in production (without updating our entire stack). 
+NATS Jetstream is _amazing_ but aside from using `nats bench` to perform basic
+read/write tests, we wanted to get insight into how our cluster will perform
+under more realistic load (without updating all applications).
 
-This is why we created `njst`.
+We created `njst` to do this. Maybe you'll find it useful too.
 
 ## You Should Know
 
@@ -69,3 +69,7 @@ graph TD;
 5. All `njst` nodes send their results back via NATS KV
 6. All `njst` nodes listen for result completions in result KV and analyze the result
 7. Any `njst` node can now respond to a "status" HTTP call for a specific job
+
+## Our Benchmarks
+
+You can read our benchmark results [here](./docs/benchmarks.md).

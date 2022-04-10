@@ -31,7 +31,8 @@
 ---
 
 ## POST /bench
-* **Description**: Create a new benchmark job
+* **Description**: Create either a read or write benchmark job
+  * To create a read benchmark, you should first populate streams with data by creating a write job
 * **Request type**: `application/json`
 * **Response type**: `application/json`
 * **Sample response**:
