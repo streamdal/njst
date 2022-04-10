@@ -116,19 +116,18 @@ func (h *HTTPService) createBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 
 	settings.ID = RandString(8)
 
-	// A single node should
 	jobs, err := h.bench.GenerateCreateJobs(settings)
 	if err != nil {
-		h.log.Errorf("unable to create streams: %s", err)
-		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create streams: %s", err), rw)
+		h.log.Errorf("unable to create jobs: %s", err)
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create jobs: %s", err), rw)
 		return
 	}
 
 	// Create result bucket
 	bucket, err := h.nats.GetOrCreateBucket(natssvc.ResultBucketPrefix, settings.ID)
 	if err != nil {
-		h.log.Errorf("unable to create result bucket: %s", err)
-		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to create result bucket: %s", err), rw)
+		h.log.Errorf("unable to get or create result bucket: %s", err)
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get or create result bucket: %s", err), rw)
 		return
 	}
 
@@ -193,24 +192,6 @@ func validateReadSettings(rs *types.ReadSettings) error {
 
 	if rs.BatchSize < 1 {
 		rs.BatchSize = bench.DefaultBatchSize
-	}
-
-	// Valid read strategy?
-	if rs.Strategy == "" {
-		rs.Strategy = bench.DefaultReadStrategy
-	} else {
-		if _, ok := bench.ValidReadStrategies[rs.Strategy]; !ok {
-			return errors.Errorf("invalid strategy '%s'", rs.Strategy)
-		}
-	}
-
-	// Valid consumer group strategy?
-	if rs.ConsumerGroupStrategy == "" {
-		rs.ConsumerGroupStrategy = bench.DefaultConsumerGroupStrategy
-	} else {
-		if _, ok := bench.ValidConsumerGroupStrategies[rs.ConsumerGroupStrategy]; !ok {
-			return errors.Errorf("invalid consumer group strategy '%s'", rs.ConsumerGroupStrategy)
-		}
 	}
 
 	if rs.NumMessagesPerStream < 1 {

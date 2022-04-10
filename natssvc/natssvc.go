@@ -245,6 +245,36 @@ func (n *NATSService) runHeartbeat() error {
 	return err
 }
 
+// GetStreams will get all defined streams. If a filter is provided, GetStreams
+// will only return streams that match the filter.
+func (n *NATSService) GetStreams(filter ...string) []string {
+	var contains string
+
+	// Only care about the first filter
+	if len(filter) > 0 {
+		contains = filter[0]
+	}
+
+	streams := make([]string, 0)
+
+	for stream := range n.js.StreamNames() {
+		if contains == "" {
+			streams = append(streams, stream)
+			continue
+		} else {
+			if strings.Contains(stream, contains) {
+				streams = append(streams, stream)
+			}
+		}
+	}
+
+	return streams
+}
+
+func (n *NATSService) GetStreamInfo(stream string) (*nats.StreamInfo, error) {
+	return n.js.StreamInfo(stream)
+}
+
 func (n *NATSService) EmitJobs(jobType types.JobType, jobs []*types.Job) error {
 	if len(jobs) == 0 {
 		return errors.New("jobs are empty - nothing to emit")
@@ -442,6 +472,10 @@ func (n *NATSService) GetSettings(id string) (*types.Settings, error) {
 	}
 
 	return settings, nil
+}
+
+func (n *NATSService) AddConsumer(stream string, cfg *nats.ConsumerConfig, opts ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+	return n.js.AddConsumer(stream, cfg, opts...)
 }
 
 func (n *NATSService) GetAllSettings() ([]*types.Settings, error) {

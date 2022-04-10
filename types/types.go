@@ -6,13 +6,6 @@ import (
 )
 
 const (
-	SpreadReadStrategy ReadStrategy = "spread"
-	SharedReadStrategy ReadStrategy = "shared"
-
-	NoneConsumerGroupStrategy      ConsumerGroupStrategy = "none"
-	PerStreamConsumerGroupStrategy ConsumerGroupStrategy = "per_stream"
-	PerJobConsumerGroupStrategy    ConsumerGroupStrategy = "per_job"
-
 	InProgressStatus JobStatus = "in-progress"
 	ErrorStatus      JobStatus = "error"
 	CompletedStatus  JobStatus = "completed"
@@ -21,8 +14,6 @@ const (
 	DeleteJob JobType = "delete"
 )
 
-type ReadStrategy string
-type ConsumerGroupStrategy string
 type JobStatus string
 
 type Settings struct {
@@ -48,17 +39,22 @@ type WriteSettings struct {
 }
 
 type ReadSettings struct {
+	// WriteID should reference a completed write job
+	WriteID string `json:"write_id"`
+
 	NumStreams           int `json:"num_streams"`
 	NumNodes             int `json:"num_nodes"`
 	NumMessagesPerStream int `json:"num_messages"`
 	NumWorkersPerStream  int `json:"num_workers"`
 	BatchSize            int `json:"batch_size"`
 
-	Strategy              ReadStrategy          `json:"strategy"`
-	ConsumerGroupStrategy ConsumerGroupStrategy `json:"consumer_group_strategy"`
-
 	// Filled out by bench.GenerateCreateJobs
-	Streams []string `json:"streams"`
+	Streams []*StreamInfo `json:"streams"`
+}
+
+type StreamInfo struct {
+	StreamName        string
+	ConsumerGroupName string
 }
 
 type StatusResponse struct {

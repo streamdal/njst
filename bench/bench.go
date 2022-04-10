@@ -16,26 +16,11 @@ import (
 )
 
 const (
-	DefaultNumStreams            = 1
-	DefaultBatchSize             = 100
-	DefaultMsgSizeBytes          = 1024
-	DefaultNumMessagesPerStream  = 10000
-	DefaultNumWorkersPerStream   = 1
-	DefaultReadStrategy          = types.SpreadReadStrategy
-	DefaultConsumerGroupStrategy = types.PerJobConsumerGroupStrategy
-)
-
-var (
-	ValidReadStrategies = map[types.ReadStrategy]struct{}{
-		types.SpreadReadStrategy: {},
-		types.SharedReadStrategy: {},
-	}
-
-	ValidConsumerGroupStrategies = map[types.ConsumerGroupStrategy]struct{}{
-		types.PerJobConsumerGroupStrategy:    {},
-		types.PerStreamConsumerGroupStrategy: {},
-		types.NoneConsumerGroupStrategy:      {},
-	}
+	DefaultNumStreams           = 1
+	DefaultBatchSize            = 100
+	DefaultMsgSizeBytes         = 1024
+	DefaultNumMessagesPerStream = 10000
+	DefaultNumWorkersPerStream  = 1
 )
 
 type Bench struct {
@@ -185,32 +170,128 @@ func (b *Bench) createProducer(settings *types.Settings) (string, error) {
 	return "", nil
 }
 
-func (b *Bench) createConsumer(settings *types.Settings) (string, error) {
+func (b *Bench) createConsumerGroups(settings *types.Settings, streams []string) ([]*types.StreamInfo, error) {
 	if err := validateConsumerSettings(settings); err != nil {
-		return "", errors.Wrap(err, "unable to validate consumer settings")
+		return nil, errors.Wrap(err, "unable to validate consumer settings")
 	}
 
-	return "", nil
+	streamInfo := make([]*types.StreamInfo, 0)
+
+	for _, streamName := range streams {
+		consumerGroupName := "njst-cg-" + streamName
+
+		if _, err := b.nats.AddConsumer(streamName, &nats.ConsumerConfig{
+			Durable:     consumerGroupName,
+			Description: "njst consumer",
+		}); err != nil {
+			return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
+				consumerGroupName, streamName, err)
+		}
+
+		streamInfo = append(streamInfo, &types.StreamInfo{
+			StreamName:        streamName,
+			ConsumerGroupName: consumerGroupName,
+		})
+	}
+
+	return streamInfo, nil
 }
 
 func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
-	// TODO: Do the streams exist?
-	// TODO: Create consumers
-	// TODO: Create job entries
+	if settings == nil || settings.Read == nil {
+		return nil, errors.New("unable to setup read bench without read settings")
+	}
 
-	//for _, streamName := range streams {
-	//	consumerGroupName := "cg-" + streamName
-	//
-	//	if _, err := n.js.AddConsumer(streamName, &nats.ConsumerConfig{
-	//		Durable:     consumerGroupName,
-	//		Description: "njst consumer",
-	//	}); err != nil {
-	//		return nil, errors.Wrapf(err, "unable to create consumer for stream '%s': %s", streamName, err)
-	//	}
-	//
-	//	streams[streamName] = consumerGroupName
-	//}
-	return nil, nil
+	nodes, err := b.nats.GetNodeList()
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to get node list")
+	}
+
+	if settings.Read.NumNodes > len(nodes) {
+		return nil, errors.Errorf("%d nodes requested but only %d available", settings.Read.NumNodes, len(nodes))
+	}
+
+	if settings.Read.WriteID == "" {
+		return nil, errors.New("existing write ID required for read bench")
+	}
+
+	// Do the streams exist?
+	streams := b.nats.GetStreams(settings.Read.WriteID)
+
+	if len(streams) < settings.Read.NumStreams {
+		return nil, errors.Errorf("%d streams requested but only %d available", settings.Read.NumStreams, len(streams))
+	}
+
+	if len(streams) > settings.Read.NumStreams {
+		streams = streams[:settings.Read.NumStreams]
+	}
+
+	for _, stream := range streams {
+		info, err := b.nats.GetStreamInfo(stream)
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to get stream info for '%s' stream", stream)
+		}
+
+		// Do each of the streams have enough messages?
+		if uint64(settings.Read.NumMessagesPerStream) > info.State.Msgs {
+			return nil, fmt.Errorf("stream '%s' does not contain enough messages to satisfy read request", stream)
+		}
+
+		// Can we fit at least 1 batch per worker? <- Is this needed? Is batch best effort?
+	}
+
+	streamInfo, err := b.createConsumerGroups(settings, streams)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create consumer")
+	}
+
+	jobs := make([]*types.Job, 0)
+
+	// How many nodes will this test run on?
+	var numSelectedNodes int
+
+	if settings.Read.NumNodes == 0 {
+		numSelectedNodes = len(nodes)
+	} else {
+		numSelectedNodes = settings.Read.NumNodes
+	}
+
+	if settings.Read.NumStreams < numSelectedNodes {
+		numSelectedNodes = settings.Read.NumStreams
+	}
+
+	streamsPerNode := settings.Read.NumStreams / numSelectedNodes
+	streamsPerLastNode := streamsPerNode + (settings.Read.NumStreams % numSelectedNodes)
+
+	var startIndex int
+
+	for i := 0; i < numSelectedNodes; i++ {
+		numStreams := streamsPerNode
+
+		// If this the last node, add remainder streams (if any)
+		if i == numSelectedNodes-1 {
+			numStreams = streamsPerLastNode
+		}
+
+		jobs = append(jobs, &types.Job{
+			NodeID: nodes[i],
+			Settings: &types.Settings{
+				ID:          settings.ID,
+				Description: settings.Description,
+				Read: &types.ReadSettings{
+					NumMessagesPerStream: settings.Write.NumMessagesPerStream,
+					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
+					Streams:              generateStreams(startIndex, numStreams, streamInfo),
+				},
+			},
+			CreatedBy: b.params.NodeID,
+			CreatedAt: time.Now().UTC(),
+		})
+
+		startIndex = startIndex + streamsPerNode
+	}
+
+	return jobs, nil
 }
 
 func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) {
@@ -295,6 +376,19 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	return jobs, nil
 }
 
+func generateStreams(startIndex int, numStreams int, existingStreams []*types.StreamInfo) []*types.StreamInfo {
+	streams := make([]*types.StreamInfo, 0)
+
+	for i := startIndex; i < numStreams; i++ {
+		streams = append(streams, &types.StreamInfo{
+			StreamName:        existingStreams[i].StreamName,
+			ConsumerGroupName: existingStreams[i].ConsumerGroupName,
+		})
+	}
+
+	return streams
+}
+
 func generateSubjects(startIndex int, numSubjects int, subjectPrefix string) []string {
 	subjects := make([]string, 0)
 
@@ -348,18 +442,6 @@ func (b *Bench) GenerateDeleteJobs(id string) ([]*types.Job, error) {
 	}
 
 	return jobs, nil
-}
-
-func (b *Bench) deleteProducer(id string) error {
-	return nil
-}
-
-func (b *Bench) deleteConsumer(id string) error {
-	return nil
-}
-
-func (b *Bench) Exists(name string) (bool, error) {
-	return false, nil
 }
 
 func validateParams(p *cli.Params) error {
