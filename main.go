@@ -38,7 +38,7 @@ func init() {
 		StringsVar(&params.NATSAddress)
 
 	kingpin.Flag("http-address", "What address to bind local HTTP server to").
-		Default("localhost:5000").
+		Default(":5000").
 		Envar("NJST_HTTP_ADDRESS").
 		StringVar(&params.HTTPAddress)
 
