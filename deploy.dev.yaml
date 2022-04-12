@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: njst-deployment
+spec:
+  selector:
+    matchLabels:
+      app: njst
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  minReadySeconds: 5
+  template:
+    metadata:
+      labels:
+        app: njst
+    spec:
+      containers:
+        - name: njst
+          image: ghcr.io/batchcorp/{{SERVICE}}:{{VERSION}}
+          ports:
+            - containerPort: 5000
+          env:
+            - name: ENV_NAME
+              value: "dev"
+            - name: NJST_DEBUG
+              value: "true"
+            - name: NJST_NATS_ADDRESS
+              value: "dev-nats.default.svc.cluster.local:4222"
+            - name: NJST_HTTP_ADDRESS
+              value: "localhost:5000"
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "1"
+            limits:
+              memory: "128Mi"
+              cpu: "1"
+          livenessProbe:
+            httpGet:
+              path: /health-check
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 5
+      imagePullSecrets:
+        - name: regcredv2
