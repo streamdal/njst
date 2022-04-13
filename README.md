@@ -16,11 +16,15 @@ about the performance capabilities of your NATS cluster.
 
 ## Usage
 
-1. Modify and use the following [k8s deploy config]() to deploy 3+ `nsjt` instance(s)
+1. Modify and use the following [k8s deploy config](./deploy.dev.yaml) to deploy 3+ `nsjt` instance(s)
    to your kubernetes cluster.
-    1. `kubectl apply -f njst-deploy.yaml`
+    1. `kubectl apply -f deploy.dev.yaml`
 2. Talk to any of the `njst` nodes via the [HTTP API](docs/api.md) to manage jobs
 
+NOTE: To do anything useful with `njst`, you'll want to be able to talk to its API.
+Since there's no service or ingres defined, you'll probably want to do a port-forward
+to one of the pods via `kubectl`:
+   * `kubectl port-forward njst-deployment-78d7b584cd-5sf9c 5000:5000`
 
 ## Why?
 
