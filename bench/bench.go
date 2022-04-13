@@ -1,6 +1,7 @@
 package bench
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -30,6 +31,19 @@ type Bench struct {
 	jobs      map[string]*types.Job
 	jobsMutex *sync.RWMutex
 	log       *logrus.Entry
+}
+
+type Worker struct {
+	WorkerID   int
+	NumWritten int
+	NumRead    int
+	NumErrors  int
+	Errors     []string
+	StartedAt  time.Time
+	EndedAt    time.Time
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
@@ -84,6 +98,33 @@ func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResult
 	}
 
 	return nil
+}
+
+func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, workerMap map[string]map[int]*Worker) {
+	ticker := time.NewTicker(ReporterFrequency)
+	llog := b.log.WithFields(logrus.Fields{
+		"job": job.Settings.ID,
+	})
+
+MAIN:
+	for {
+		select {
+		case <-job.Context.Done():
+			llog.Debug("job aborted")
+			break MAIN
+		case <-doneCh:
+			llog.Debug("job completed")
+			break MAIN
+		case <-ticker.C:
+			aggregateStats := b.calculateStats(job.Settings, workerMap, types.InProgressStatus, "; ticker")
+
+			if err := b.nats.WriteStatus(aggregateStats); err != nil {
+				b.log.Error("unable to write status", "error", err)
+			}
+		}
+	}
+
+	llog.Debug("reporter exiting")
 }
 
 func (b *Bench) Status(id string) (*types.Status, error) {
@@ -204,6 +245,17 @@ func (b *Bench) createConsumerGroups(settings *types.Settings, streams []string)
 	return streamInfo, nil
 }
 
+// Job logic
+//
+// 1. A stream is assigned to be worked on by 1 node.
+//     * If there are more streams than nodes - individual streams are distributed
+//       evenly between nodes.
+//     * Streams are not "shared" between nodes
+//
+// 2. A job informs how many messages the job handler should process
+//
+// 3. For "read" jobs, settings.Read.Streams is used to inform the worker how
+//    many streams the job should be reading from.
 func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	if settings == nil || settings.Read == nil {
 		return nil, errors.New("unable to setup read bench without read settings")

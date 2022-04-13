@@ -16,22 +16,12 @@ const (
 	ReporterFrequency = time.Second
 )
 
-type WorkerStats struct {
-	WorkerID   int
-	NumWritten int
-	NumRead    int
-	NumErrors  int
-	Errors     []string
-	StartedAt  time.Time
-	EndedAt    time.Time
-}
-
 func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
-	stats := map[int]*WorkerStats{}
-
 	if job == nil || job.Settings == nil {
 		return nil, errors.New("job or job settings cannot be nil")
 	}
+
+	workerMap := make(map[string]map[int]*Worker, 0)
 
 	// Generate the data
 	data, err := GenRandomBytes(job.Settings.Write.MsgSizeBytes)
@@ -41,20 +31,22 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 	doneCh := make(chan struct{}, 1)
 
-	go b.runReporter(doneCh, job, stats)
+	go b.runReporter(doneCh, job, workerMap)
 
 	wg := &sync.WaitGroup{}
 
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 
-	var workerID int
-
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
-			stats[workerID] = &WorkerStats{
-				WorkerID:  workerID,
+			if _, ok := workerMap[subj]; !ok {
+				workerMap[subj] = make(map[int]*Worker, 0)
+			}
+
+			workerMap[subj][i] = &Worker{
+				WorkerID:  i,
 				StartedAt: time.Now(),
 				Errors:    make([]string, 0),
 			}
@@ -63,12 +55,10 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 			// Last worker gets remaining messages
 			if i == job.Settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(job.Context, workerID, subj, data, numMessagesPerLastWorker, stats[workerID], wg)
+				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
 			} else {
-				go b.runWriterWorker(job.Context, workerID, subj, data, numMessagesPerWorker, stats[workerID], wg)
+				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
 			}
-
-			workerID++
 		}
 	}
 
@@ -79,10 +69,10 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	doneCh <- struct{}{}
 
 	// Calculate the final status
-	return b.calculateStats(job.Settings, stats, types.CompletedStatus, "; final"), nil
+	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
 }
 
-func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, data []byte, numMessages int, stats *WorkerStats, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, data []byte, numMessages int, stats *Worker, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	llog := b.log.WithFields(logrus.Fields{
@@ -121,28 +111,7 @@ func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, 
 	stats.EndedAt = time.Now()
 }
 
-func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, stats map[int]*WorkerStats) {
-	ticker := time.NewTicker(ReporterFrequency)
-
-MAIN:
-	for {
-		select {
-		case <-job.Context.Done():
-			b.log.Warningf("context canceled - exiting reporter")
-			break MAIN
-		case <-ticker.C:
-			if err := b.nats.WriteStatus(b.calculateStats(job.Settings, stats, types.InProgressStatus, "; ticker")); err != nil {
-				b.log.Error("unable to write status", "error", err)
-			}
-		case <-doneCh:
-			break MAIN
-		}
-	}
-
-	b.log.Debugf("reporter exiting for job '%s'", job.Settings.ID)
-}
-
-func (b *Bench) calculateStats(settings *types.Settings, stats map[int]*WorkerStats, jobStatus types.JobStatus, msg string) *types.Status {
+func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]map[int]*Worker, jobStatus types.JobStatus, msg string) *types.Status {
 	var (
 		maxElapsed     time.Duration
 		maxStartedAt   time.Time
@@ -159,31 +128,34 @@ func (b *Bench) calculateStats(settings *types.Settings, stats map[int]*WorkerSt
 		message = "benchmark completed"
 	}
 
-	for _, status := range stats {
-		elapsed := time.Now().Sub(status.StartedAt)
+	for _, workGroup := range workerMap {
+		for _, worker := range workGroup {
+			elapsed := time.Now().Sub(worker.StartedAt)
 
-		if elapsed > maxElapsed {
-			maxElapsed = elapsed
-		}
+			if elapsed > maxElapsed {
+				maxElapsed = elapsed
+			}
 
-		if status.StartedAt.After(maxStartedAt) {
-			maxStartedAt = status.StartedAt
-		}
+			if worker.StartedAt.After(maxStartedAt) {
+				maxStartedAt = worker.StartedAt
+			}
 
-		if status.EndedAt.After(maxEndedAt) {
-			maxEndedAt = status.EndedAt
-		}
+			if worker.EndedAt.After(maxEndedAt) {
+				maxEndedAt = worker.EndedAt
+			}
 
-		if settings.Read != nil {
-			numProcessed += status.NumRead
-		} else if settings.Write != nil {
-			numProcessed += status.NumWritten
-		}
+			if settings.Read != nil {
+				numProcessed += worker.NumRead
+			} else if settings.Write != nil {
+				numProcessed += worker.NumWritten
+			}
 
-		numErrorsTotal += status.NumErrors
+			numErrorsTotal += worker.NumErrors
 
-		if len(status.Errors) > 0 {
-			errs = append(errs, status.Errors...)
+			if len(worker.Errors) > 0 {
+				errs = append(errs, worker.Errors...)
+			}
+
 		}
 	}
 

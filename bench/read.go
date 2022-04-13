@@ -12,9 +12,11 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
-	stats := map[int]*WorkerStats{}
+const (
+	MonitorFrequency = time.Second
+)
 
+func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	if job == nil || job.Settings == nil {
 		return nil, errors.New("job or job settings cannot be nil")
 	}
@@ -27,49 +29,118 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 		return nil, errors.New("no streams to read from")
 	}
 
-	msgsPerWorker := job.Settings.Read.NumMessagesPerStream / job.Settings.Read.NumWorkersPerStream
-	msgsPerWorkerRemainder := job.Settings.Read.NumMessagesPerStream % job.Settings.Read.NumWorkersPerStream
-
+	workerMap := make(map[string]map[int]*Worker, 0)
 	var workerID int
 
 	for _, streamInfo := range job.Settings.Read.Streams {
 		for i := 0; i < job.Settings.Read.NumWorkersPerStream; i++ {
-			stats[workerID] = &WorkerStats{
+			if workerMap[streamInfo.StreamName] == nil {
+				workerMap[streamInfo.StreamName] = make(map[int]*Worker, 0)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+
+			workerMap[streamInfo.StreamName][workerID] = &Worker{
 				WorkerID:  workerID,
 				StartedAt: time.Now(),
 				Errors:    make([]string, 0),
+				ctx:       ctx,    // Worker specific context; read from by worker
+				cancel:    cancel, // Worker specific cancel; used by monitor to signal worker to stop
 			}
 
 			wg.Add(1)
 
-			numMessages := msgsPerWorker
-
-			// Last worker gets the remainder of messages
-			if i == job.Settings.Read.NumWorkersPerStream-1 {
-				numMessages = msgsPerWorker + msgsPerWorkerRemainder
-			}
-
-			go b.runReaderWorker(job.Context, job, workerID, numMessages, streamInfo, stats[workerID], wg)
+			go b.runReaderWorker(job, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
 
 			workerID++
 		}
 	}
 
-	// Launch a reporter
-	go b.runReporter(doneCh, job, stats)
+	// Launch periodic workerMap aggregation & reporting
+	go b.runReporter(doneCh, job, workerMap)
+
+	// Monitor overall work and inform workers when to stop
+	go b.runReaderMonitor(doneCh, job, workerMap)
 
 	// Wait for all workers to finish
 	wg.Wait()
 
-	// Stop the reporter
-	doneCh <- struct{}{}
+	// Stop reporter & monitor
+	close(doneCh)
 
 	// Calculate the final status
-	return b.calculateStats(job.Settings, stats, types.CompletedStatus, "; final"), nil
+	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
 }
 
-func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID int, numMessages int, streamInfo *types.StreamInfo, stats *WorkerStats, wg *sync.WaitGroup) {
-	defer wg.Done()
+func (b *Bench) runReaderMonitor(doneCh chan struct{}, job *types.Job, workerMap map[string]map[int]*Worker) {
+	llog := b.log.WithFields(logrus.Fields{
+		"method": "runReaderMonitor",
+		"job":    job.Settings.ID,
+	})
+
+	ticker := time.NewTicker(MonitorFrequency)
+
+	finishedStreams := map[string]bool{}
+
+MAIN:
+	for {
+		select {
+		case <-ticker.C:
+			for stream, numRead := range b.calculateNumRead(workerMap) {
+				// Nothing to cancel for an already finished stream
+				if _, ok := finishedStreams[stream]; ok {
+					continue
+				}
+
+				if numRead >= job.Settings.Read.NumMessagesPerStream {
+					// Tell workgroup to stop
+					for _, worker := range workerMap[stream] {
+						llog.Debugf("signalling worker '%d' for stream '%s' to stop", worker.WorkerID, stream)
+						go worker.cancel()
+					}
+
+					finishedStreams[stream] = true
+				}
+			}
+		case <-doneCh:
+			// Job has been completed
+			llog.Debug("job completed")
+			break MAIN
+		case <-job.Context.Done():
+			// Job has been deleted - tell all workers to exit
+			llog.Debug("job asked to abort")
+
+			for _, stream := range workerMap {
+				for _, worker := range stream {
+					llog.Debugf("signalling worker '%d' to stop", worker.WorkerID)
+					go worker.cancel()
+				}
+			}
+
+			break MAIN
+		}
+	}
+
+	llog.Debug("exiting")
+}
+
+func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[string]int {
+	numRead := make(map[string]int, 0)
+
+	for stream, workers := range workerMap {
+		for _, worker := range workers {
+			numRead[stream] += worker.NumRead
+		}
+	}
+
+	return numRead
+}
+
+func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
+	defer func() {
+		worker.EndedAt = time.Now()
+		wg.Done()
+	}()
 
 	llog := b.log.WithFields(logrus.Fields{
 		"worker_id": workerID,
@@ -82,40 +153,34 @@ func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID in
 	sub, err := b.nats.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
 	if err != nil {
 		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
-		stats.Errors = append(stats.Errors, err.Error())
-		stats.NumErrors++
+		worker.Errors = append(worker.Errors, err.Error())
+		worker.NumErrors++
 
 		return
 	}
 
 	for {
-		if stats.NumRead >= numMessages {
-			llog.Debugf("worker finished reading %d messages", stats.NumRead)
-			break
-		}
+		llog.Debugf("worker has read %d messages", worker.NumRead)
 
-		llog.Debugf("worker has read %d messages", stats.NumRead)
-
-		msgs, err := sub.Fetch(job.Settings.Read.BatchSize, nats.MaxWait(5*time.Second))
+		msgs, err := sub.Fetch(job.Settings.Read.BatchSize, nats.Context(worker.ctx))
 		if err != nil {
-			llog.Debugf("got an error; number of messages: %d", len(msgs))
-
 			if strings.Contains(err.Error(), "context canceled") {
-				llog.Debug("worker context cancelled - '%d' read, '%d' errors", stats.NumRead, stats.NumErrors)
+				llog.Debug("worker asked to exit")
 
-				return
+				break
 			}
 
 			llog.Errorf("unable to fetch message(s): %s", err)
 
-			stats.NumErrors++
+			worker.NumErrors++
 
-			if stats.NumErrors > job.Settings.Read.NumMessagesPerStream {
+			if worker.NumErrors > job.Settings.Read.NumMessagesPerStream {
 				llog.Error("worker exiting prematurely due to too many errors")
+
 				break
 			}
 
-			stats.Errors = append(stats.Errors, err.Error())
+			worker.Errors = append(worker.Errors, err.Error())
 
 			continue
 		}
@@ -125,13 +190,10 @@ func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID in
 				llog.Warningf("unable to ack message: %s", err)
 			}
 
-			stats.NumRead++
+			worker.NumRead++
 		}
-
-		//stats.NumRead += len(msgs)
 	}
 
-	llog.Debugf("worker exiting; read '%d' messages", stats.NumRead)
+	llog.Debugf("worker exiting; '%d' read, '%d' errors", worker.NumRead, worker.NumErrors)
 
-	stats.EndedAt = time.Now()
 }
