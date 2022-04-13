@@ -3,15 +3,18 @@
 `njst` is a [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) 
 _distributed_ benchmark and testing tool.
 
-NOTE: While benchmarks are dumb, this will at least give you a _general_ idea 
-about the performance capabilities of your NATS cluster.
+[Batch.sh](https://batch.sh) makes significant use of NATS JetStream and we use
+this tool to run periodic benchmarks on our internal NATS JS clusters.
+
+**NOTE: While benchmarks are dumb, this will at least give you a _general_ idea 
+about the performance capabilities of your NATS cluster.**
 
 ## Features
 
 * Distributed by default
 * No leader, no followers
 * Cloud native - works best in k8s
-* Simple HTTP REST'ish API for job control
+* Simple [HTTP REST'ish API](./docs/api.md) for job control
 * Ability to perform *massively parallel* tests to (attempt to) simulate real-world stress
 
 ## Usage
