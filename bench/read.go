@@ -21,27 +21,42 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 	doneCh := make(chan struct{}, 1)
 
-	go b.runReporter(doneCh, job, stats)
-
 	wg := &sync.WaitGroup{}
 
 	if len(job.Settings.Read.Streams) == 0 {
 		return nil, errors.New("no streams to read from")
 	}
 
+	msgsPerWorker := job.Settings.Read.NumMessagesPerStream / job.Settings.Read.NumWorkersPerStream
+	msgsPerWorkerRemainder := job.Settings.Read.NumMessagesPerStream % job.Settings.Read.NumWorkersPerStream
+
+	var workerID int
+
 	for _, streamInfo := range job.Settings.Read.Streams {
 		for i := 0; i < job.Settings.Read.NumWorkersPerStream; i++ {
-			stats[i] = &WorkerStats{
-				WorkerID:  i,
+			stats[workerID] = &WorkerStats{
+				WorkerID:  workerID,
 				StartedAt: time.Now(),
 				Errors:    make([]string, 0),
 			}
 
 			wg.Add(1)
 
-			go b.runReaderWorker(job.Context, job, i, streamInfo, stats[i], wg)
+			numMessages := msgsPerWorker
+
+			// Last worker gets the remainder of messages
+			if i == job.Settings.Read.NumWorkersPerStream-1 {
+				numMessages = msgsPerWorker + msgsPerWorkerRemainder
+			}
+
+			go b.runReaderWorker(job.Context, job, workerID, numMessages, streamInfo, stats[workerID], wg)
+
+			workerID++
 		}
 	}
+
+	// Launch a reporter
+	go b.runReporter(doneCh, job, stats)
 
 	// Wait for all workers to finish
 	wg.Wait()
@@ -53,7 +68,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	return b.calculateStats(job.Settings, stats, types.CompletedStatus, "; final"), nil
 }
 
-func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID int, streamInfo *types.StreamInfo, stats *WorkerStats, wg *sync.WaitGroup) {
+func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID int, numMessages int, streamInfo *types.StreamInfo, stats *WorkerStats, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	llog := b.log.WithFields(logrus.Fields{
@@ -74,13 +89,17 @@ func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID in
 	}
 
 	for {
-		if stats.NumRead >= job.Settings.Read.NumMessagesPerStream {
+		if stats.NumRead >= numMessages {
 			llog.Debugf("worker finished reading %d messages", stats.NumRead)
 			break
 		}
 
-		msgs, err := sub.Fetch(job.Settings.Read.BatchSize, nats.Context(ctx))
+		llog.Debugf("worker has read %d messages", stats.NumRead)
+
+		msgs, err := sub.Fetch(job.Settings.Read.BatchSize, nats.MaxWait(5*time.Second))
 		if err != nil {
+			llog.Debugf("got an error; number of messages: %d", len(msgs))
+
 			if strings.Contains(err.Error(), "context canceled") {
 				llog.Debug("worker context cancelled - '%d' read, '%d' errors", stats.NumRead, stats.NumErrors)
 
@@ -101,11 +120,18 @@ func (b *Bench) runReaderWorker(ctx context.Context, job *types.Job, workerID in
 			continue
 		}
 
-		// Avoiding a lock here to speed things up
-		stats.NumRead = stats.NumRead + len(msgs)
+		for _, msg := range msgs {
+			if err := msg.Ack(); err != nil {
+				llog.Warningf("unable to ack message: %s", err)
+			}
+
+			stats.NumRead++
+		}
+
+		//stats.NumRead += len(msgs)
 	}
 
-	llog.Debug("worker exiting")
+	llog.Debugf("worker exiting; read '%d' messages", stats.NumRead)
 
 	stats.EndedAt = time.Now()
 }

@@ -12,6 +12,10 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+const (
+	ReporterFrequency = time.Second
+)
+
 type WorkerStats struct {
 	WorkerID   int
 	NumWritten int
@@ -44,11 +48,13 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 
+	var workerID int
+
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
-			stats[i] = &WorkerStats{
-				WorkerID:  i,
+			stats[workerID] = &WorkerStats{
+				WorkerID:  workerID,
 				StartedAt: time.Now(),
 				Errors:    make([]string, 0),
 			}
@@ -57,10 +63,12 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 			// Last worker gets remaining messages
 			if i == job.Settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerLastWorker, stats[i], wg)
+				go b.runWriterWorker(job.Context, workerID, subj, data, numMessagesPerLastWorker, stats[workerID], wg)
 			} else {
-				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerWorker, stats[i], wg)
+				go b.runWriterWorker(job.Context, workerID, subj, data, numMessagesPerWorker, stats[workerID], wg)
 			}
+
+			workerID++
 		}
 	}
 
@@ -105,18 +113,16 @@ func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, 
 			continue
 		}
 
-		// Avoiding a lock here to speed things up
 		stats.NumWritten++
 	}
 
-	llog.Debug("worker exiting")
+	llog.Debugf("worker exiting; wrote '%d' messages", stats.NumWritten)
 
 	stats.EndedAt = time.Now()
 }
 
 func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, stats map[int]*WorkerStats) {
-	// Emit status every 5 seconds
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(ReporterFrequency)
 
 MAIN:
 	for {
@@ -189,16 +195,16 @@ func (b *Bench) calculateStats(settings *types.Settings, stats map[int]*WorkerSt
 	avgMsgPerSec := float64(numProcessed) / maxElapsed.Seconds()
 
 	return &types.Status{
-		NodeID:         b.params.NodeID,
-		Status:         jobStatus,
-		Message:        message + msg,
-		Errors:         errs,
-		JobID:          settings.ID,
-		ElapsedSeconds: maxElapsed.Seconds(),
-		AvgMsgPerSec:   avgMsgPerSec,
-		TotalProcessed: numProcessed,
-		TotalErrors:    numErrorsTotal,
-		StartedAt:      maxStartedAt,
-		EndedAt:        maxEndedAt,
+		NodeID:              b.params.NodeID,
+		Status:              jobStatus,
+		Message:             message + msg,
+		Errors:              errs,
+		JobID:               settings.ID,
+		ElapsedSeconds:      maxElapsed.Seconds(),
+		AvgMsgPerSecPerNode: avgMsgPerSec,
+		TotalProcessed:      numProcessed,
+		TotalErrors:         numErrorsTotal,
+		StartedAt:           maxStartedAt,
+		EndedAt:             maxEndedAt,
 	}
 }

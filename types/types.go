@@ -63,17 +63,18 @@ type StatusResponse struct {
 }
 
 type Status struct {
-	Status         JobStatus `json:"status"`
-	Message        string    `json:"message"`
-	Errors         []string  `json:"errors,omitempty"`
-	JobID          string    `json:"job_id"`
-	NodeID         string    `json:"node_id"`
-	ElapsedSeconds float64   `json:"elapsed_seconds"`
-	AvgMsgPerSec   float64   `json:"avg_msg_per_sec"`
-	TotalProcessed int       `json:"total_processed"`
-	TotalErrors    int       `json:"total_errors"`
-	StartedAt      time.Time `json:"started_at"`
-	EndedAt        time.Time `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
+	Status               JobStatus `json:"status"`
+	Message              string    `json:"message"`
+	Errors               []string  `json:"errors,omitempty"`
+	JobID                string    `json:"job_id"`
+	NodeID               string    `json:"node_id"`
+	ElapsedSeconds       float64   `json:"elapsed_seconds"`
+	AvgMsgPerSecPerNode  float64   `json:"avg_msg_per_sec_per_node"`
+	AvgMsgPerSecAllNodes float64   `json:"avg_msg_per_sec_all_nodes"`
+	TotalProcessed       int       `json:"total_processed"`
+	TotalErrors          int       `json:"total_errors"`
+	StartedAt            time.Time `json:"started_at"`
+	EndedAt              time.Time `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
 }
 
 type JobType string

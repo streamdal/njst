@@ -100,6 +100,7 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 	}
 
 	finalStatus := &types.Status{}
+	var rateTotal float64
 
 	for _, key := range keys {
 		b.log.Debugf("looking up results in bucket '%s', object '%s'", fullBucketName, key)
@@ -148,15 +149,21 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 		avgMsgPerSec := float64(finalStatus.TotalProcessed) / finalStatus.ElapsedSeconds
 
 		// If we don't have a message rate yet, set it to the first one we get
-		if finalStatus.AvgMsgPerSec == 0 {
-			finalStatus.AvgMsgPerSec = avgMsgPerSec
+		if finalStatus.AvgMsgPerSecPerNode == 0 {
+			finalStatus.AvgMsgPerSecPerNode = avgMsgPerSec
 		} else {
-			finalStatus.AvgMsgPerSec = (finalStatus.AvgMsgPerSec + avgMsgPerSec) / 2
+			finalStatus.AvgMsgPerSecPerNode = (finalStatus.AvgMsgPerSecAllNodes + avgMsgPerSec) / 2
 		}
+
+		rateTotal = rateTotal + finalStatus.AvgMsgPerSecPerNode
 	}
 
+	finalStatus.AvgMsgPerSecAllNodes = rateTotal / float64(len(keys))
+
+	// Make stats more readable
 	finalStatus.ElapsedSeconds = round(finalStatus.ElapsedSeconds, 2)
-	finalStatus.AvgMsgPerSec = round(finalStatus.AvgMsgPerSec, 2)
+	finalStatus.AvgMsgPerSecPerNode = round(finalStatus.AvgMsgPerSecPerNode, 2)
+	finalStatus.AvgMsgPerSecAllNodes = round(finalStatus.AvgMsgPerSecAllNodes, 2)
 
 	return finalStatus, nil
 }
@@ -177,12 +184,12 @@ func (b *Bench) createConsumerGroups(settings *types.Settings, streams []string)
 	streamInfo := make([]*types.StreamInfo, 0)
 
 	for _, streamName := range streams {
-		consumerGroupName := "njst-cg-" + streamName
+		consumerGroupName := "njst-cg-" + streamName + "-" + settings.ID
 
 		if _, err := b.nats.AddConsumer(streamName, &nats.ConsumerConfig{
 			Durable:     consumerGroupName,
 			Description: "njst consumer",
-			AckPolicy:   nats.AckAllPolicy, // TODO: This should be configurable
+			AckPolicy:   nats.AckExplicitPolicy, // TODO: This should be configurable
 		}); err != nil {
 			return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
 				consumerGroupName, streamName, err)
