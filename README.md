@@ -52,6 +52,88 @@ that are currently connected to the cluster
 
 * There is no auth - we have no need for it. If you want it, feel free to add it.
 
+## Sample Jobs & Results
+
+### Heavy Write Test
+
+* This will cause 16 streams to be divided across 3 nodes
+* Each stream will have 4 concurrent writers launched
+* Each concurrent writer will write 25,000 messages to a stream
+* Each message will contain 4096 random bytes (generated once at test creation time)
+* `keep_streams" tells the test to NOT delete the generated streams and their contents
+  * **We want this so that we can use the generated content for a future read test**
+* Result: you will write 1,600,000 messages in total (16 streams x 100,000 messages)
+
+```json
+{
+	"description": "heavy",
+	"write": {
+		"num_nodes": 3,
+		"num_streams": 16,
+		"num_messages_per_stream": 100000,
+		"num_workers_per_stream": 4,
+		"msg_size_bytes": 4096,
+		"keep_streams": true
+	}
+}
+```
+
+### Heavy Read Test
+
+* Spread reading from 16 streams across 3 nodes
+  * 2 nodes will handle 5 streams, 1 node will handle 6 streams
+* Each stream will be read by 4 concurrent workers
+* Batching is *highly* important: each worker will read 1,000 messages at a time
+
+```json
+{
+	"description": "heavy read test",
+	"read": {
+		"write_id": "i1mSzcm8", <--- write id from previous write test
+		"num_nodes": 3,
+		"num_streams": 16,
+		"num_messages_per_stream": 100000,
+		"num_workers_per_stream": 4,
+		"batch_size": 1000
+	}
+}
+```
+
+### Results
+
+**NOTE**: These are dummy output values. For our own benchmark results, see [docs/benchmarks.md](./docs/benchmarks.md).
+
+```json
+{
+	"status": {
+		"status": "completed",
+		"message": "benchmark completed; final",
+		"job_id": "dyczUnmQ",
+		"node_id": "1efe113e",
+		"elapsed_seconds": 245,
+		"avg_msg_per_sec_per_node": 2176.67,
+		"avg_msg_per_sec_all_nodes": 6530.61,
+		"total_processed": 1600000,
+		"total_errors": 0,
+		"started_at": "2022-04-13T14:18:22.483853-07:00",
+		"ended_at": "0001-01-01T00:00:00Z"
+	},
+	"settings": {
+		"description": "medium read test with workermap",
+		"read": {
+			"write_id": "i1mSzcm8",
+			"num_streams": 16,
+			"num_nodes": 3,
+			"num_messages_per_stream": 100000,
+			"num_workers_per_stream": 4,
+			"batch_size": 1000
+		},
+		"id": "dyczUnmQ"
+	}
+}
+```
+
+
 ## Internal Flow
 
 The general job flow can visualized via this confusing mermaid diagram:
