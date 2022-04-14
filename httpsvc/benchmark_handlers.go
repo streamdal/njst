@@ -147,9 +147,11 @@ func (h *HTTPService) createBenchmarkHandler(rw http.ResponseWriter, r *http.Req
 		return
 	}
 
+	h.log.Infof("Emitted '%d' create benchmark job(s)", len(jobs))
+
 	writeJSON(http.StatusOK, map[string]string{
 		"id":      settings.ID,
-		"message": "benchmark created successfully",
+		"message": fmt.Sprintf("benchmark created successfully; created %d jobs", len(jobs)),
 	}, rw)
 }
 

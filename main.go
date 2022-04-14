@@ -65,6 +65,9 @@ func init() {
 		Envar("NJST_NATS_TLS_CA").
 		ExistingFileVar(&params.NATSTLSCaCert)
 
+	kingpin.Flag("enable-pprof", "Enable pprof (exposes /debug/pprof/*").
+		BoolVar(&params.EnablePprof)
+
 	kingpin.CommandLine.HelpFlag.Short('h')
 	kingpin.Parse()
 }

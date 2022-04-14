@@ -68,6 +68,10 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	// Stop reporter & monitor
 	close(doneCh)
 
+	// Hack: It's possible other nodes are lagging behind this node - wait a little bit
+	// before we write final status
+	time.Sleep(5 * time.Second)
+
 	// Calculate the final status
 	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
 }
@@ -158,6 +162,12 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 
 		return
 	}
+
+	defer func() {
+		if err := sub.Unsubscribe(); err != nil {
+			llog.Warningf("unable to unsubscribe from stream '%s': %v", streamInfo.StreamName, err)
+		}
+	}()
 
 	for {
 		llog.Debugf("worker has read %d messages", worker.NumRead)

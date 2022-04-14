@@ -2,14 +2,15 @@ package httpsvc
 
 import (
 	"encoding/json"
-	"errors"
 	"math/rand"
 	"net/http"
+	"net/http/pprof"
 	"time"
 
 	"github.com/batchcorp/njst/bench"
 	"github.com/batchcorp/njst/natssvc"
 	"github.com/julienschmidt/httprouter"
+	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 
 	"github.com/batchcorp/njst/cli"
@@ -56,6 +57,19 @@ func New(params *cli.Params, n *natssvc.NATSService, b *bench.Bench, version str
 func (h *HTTPService) Start() error {
 	router := httprouter.New()
 
+	if h.params.EnablePprof {
+		// pprof stuff
+		router.HandlerFunc(http.MethodGet, "/debug/pprof/", pprof.Index)
+		router.HandlerFunc(http.MethodGet, "/debug/pprof/cmdline", pprof.Cmdline)
+		router.HandlerFunc(http.MethodGet, "/debug/pprof/profile", pprof.Profile)
+		router.HandlerFunc(http.MethodGet, "/debug/pprof/symbol", pprof.Symbol)
+		router.HandlerFunc(http.MethodGet, "/debug/pprof/trace", pprof.Trace)
+		router.Handler(http.MethodGet, "/debug/pprof/goroutine", pprof.Handler("goroutine"))
+		router.Handler(http.MethodGet, "/debug/pprof/heap", pprof.Handler("heap"))
+		router.Handler(http.MethodGet, "/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+		router.Handler(http.MethodGet, "/debug/pprof/block", pprof.Handler("block"))
+	}
+
 	router.HandlerFunc("GET", "/health-check", h.healthCheckHandler)
 	router.HandlerFunc("GET", "/version", h.versionHandler)
 
@@ -68,13 +82,23 @@ func (h *HTTPService) Start() error {
 
 	server := &http.Server{Addr: h.params.HTTPAddress, Handler: router}
 
+	errCh := make(chan error, 0)
+
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
-			h.log.Errorf("HTTP server error: %s", err)
+			errCh <- err
 		}
 	}()
 
-	return nil
+	timer := time.NewTimer(5 * time.Second)
+
+	select {
+	case err := <-errCh:
+		return errors.Wrap(err, "unable to listen and serve")
+	case <-timer.C:
+		// No error after 5s
+		return nil
+	}
 }
 
 func writeJSON(statusCode int, data interface{}, w http.ResponseWriter) {

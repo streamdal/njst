@@ -11,4 +11,5 @@ type Params struct {
 	NATSTLSClientCert string   `json:"nats_tls_client_cert"`
 	NATSTLSClientKey  string   `json:"nats_tls_client_key"`
 	NATSTLSSkipVerify bool     `json:"nats_tls_skip_verify"`
+	EnablePprof       bool     `json:"enable_pprof"`
 }

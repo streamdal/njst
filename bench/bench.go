@@ -188,6 +188,7 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 		}
 
 		avgMsgPerSec := float64(finalStatus.TotalProcessed) / finalStatus.ElapsedSeconds
+		rateTotal += avgMsgPerSec
 
 		// If we don't have a message rate yet, set it to the first one we get
 		if finalStatus.AvgMsgPerSecPerNode == 0 {
@@ -196,7 +197,6 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 			finalStatus.AvgMsgPerSecPerNode = (finalStatus.AvgMsgPerSecAllNodes + avgMsgPerSec) / 2
 		}
 
-		rateTotal = rateTotal + finalStatus.AvgMsgPerSecPerNode
 	}
 
 	finalStatus.AvgMsgPerSecAllNodes = rateTotal / float64(len(keys))
@@ -439,8 +439,8 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 func generateStreams(startIndex int, numStreams int, existingStreams []*types.StreamInfo) []*types.StreamInfo {
 	streams := make([]*types.StreamInfo, 0)
 
-	for i := startIndex; i < numStreams; i++ {
-		logrus.Debugf("adding stream '%s' consumer group '%s'\n", existingStreams[i].StreamName, existingStreams[i].ConsumerGroupName)
+	for i := startIndex; i < numStreams+startIndex; i++ {
+		logrus.Debugf("generateStreams: adding stream '%s' consumer group '%s'\n", existingStreams[i].StreamName, existingStreams[i].ConsumerGroupName)
 
 		streams = append(streams, &types.StreamInfo{
 			StreamName:        existingStreams[i].StreamName,

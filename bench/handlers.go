@@ -25,6 +25,8 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 		"node_id": b.params.NodeID,
 	})
 
+	llog.Info("Received new create job")
+
 	job := b.newJob(jobID)
 	defer b.deleteJob(jobID)
 
@@ -40,8 +42,10 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 	var err error
 
 	if job.Settings.Write != nil {
+		llog.Info("Performing write job")
 		status, err = b.runWriteBenchmark(job)
 	} else if job.Settings.Read != nil {
+		llog.Info("Performing read job")
 		status, err = b.runReadBenchmark(job)
 	} else {
 		b.ReportError(jobID, "unrecognized job type - both read and write are nil")
@@ -54,10 +58,10 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 	}
 
 	if err := b.nats.WriteStatus(status); err != nil {
-		llog.Debugf("unable to write final result status: %s", err)
+		llog.Debugf("Unable to write final result status: %s", err)
 	}
 
-	llog.Debugf("job '%s' on node '%s' finished", jobID, b.params.NodeID)
+	llog.Info("Job complete")
 }
 
 // DeleteMsgHandler is called by natssvc when njst.$nodeID.delete is written to
@@ -82,8 +86,7 @@ func (b *Bench) DeleteMsgHandler(msg *nats.Msg) {
 		return
 	}
 
-	// We don't need to unmarshal the job since we already have the id
-	llog.Debugf("deleting job '%s' on node '%s'", jobID, b.params.NodeID)
+	llog.Info("Received new delete job")
 
 	// Cancel running reporter + worker(s)
 	job.CancelFunc()
@@ -91,7 +94,7 @@ func (b *Bench) DeleteMsgHandler(msg *nats.Msg) {
 	// Delete job from mem
 	b.deleteJob(jobID)
 
-	b.log.Debugf("job '%s' on node '%s' deleted", jobID, b.params.NodeID)
+	b.log.Info("Job deleted")
 }
 
 func (b *Bench) ReportError(jobID, msg string) {
