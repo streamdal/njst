@@ -6,7 +6,7 @@ spec:
   selector:
     matchLabels:
       app: njst
-  replicas: 3
+  replicas: 10
   strategy:
     type: RollingUpdate
     rollingUpdate:
