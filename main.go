@@ -81,7 +81,7 @@ func main() {
 		logrus.SetLevel(logrus.DebugLevel)
 	}
 
-	logrus.Debug("Starting NATS service")
+	logrus.Infof("njst is starting...")
 
 	// Create dependencies
 	n, err := natssvc.New(params)
@@ -109,8 +109,6 @@ func main() {
 		logrus.Fatal("Unable to start NATS service: ", err)
 	}
 
-	logrus.Debug("Starting HTTP service")
-
 	if err := h.Start(); err != nil {
 		logrus.Fatal("Unable to start HTTP service: ", err)
 	}
@@ -127,7 +125,7 @@ func main() {
 	logrus.Infof("HTTP server listening on:     %s", params.HTTPAddress)
 	logrus.Infof("Nodes in cluster:             %d", len(nodes))
 	logrus.Info("")
-	logrus.Info("njst ready!")
+	logrus.Info("njst is ready. Refer to 'docs/api.md' for API usage.")
 
 	// Catch SIGINT, remove our heartbeat key
 	c := make(chan os.Signal, 1)
