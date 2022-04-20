@@ -13,7 +13,8 @@ import (
 )
 
 const (
-	MonitorFrequency = time.Second
+	MonitorFrequency   = time.Second
+	MaxErrorsPerWorker = 100
 )
 
 func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
@@ -38,7 +39,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 				workerMap[streamInfo.StreamName] = make(map[int]*Worker, 0)
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
 				WorkerID:  workerID,
@@ -154,6 +155,18 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 
 	llog.Debugf("worker starting; read settings %+v", job.Settings.Read)
 
+	//conn, err := b.nats.NewConn()
+	//if err != nil {
+	//	llog.Errorf("error creating nats connection: %s", err)
+	//	return
+	//}
+	//
+	//js, err := conn.JetStream()
+	//if err != nil {
+	//	llog.Errorf("error creating jetstream context: %s", err)
+	//	return
+	//}
+
 	sub, err := b.nats.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
 	if err != nil {
 		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
@@ -184,7 +197,7 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 
 			worker.NumErrors++
 
-			if worker.NumErrors > job.Settings.Read.NumMessagesPerStream {
+			if worker.NumErrors > MaxErrorsPerWorker {
 				llog.Error("worker exiting prematurely due to too many errors")
 
 				break
@@ -205,5 +218,4 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 	}
 
 	llog.Debugf("worker exiting; '%d' read, '%d' errors", worker.NumRead, worker.NumErrors)
-
 }

@@ -113,6 +113,10 @@ func New(params *cli.Params) (*NATSService, error) {
 	}, nil
 }
 
+func (n *NATSService) NewConn() (*nats.Conn, error) {
+	return newConn(n.params)
+}
+
 func (n *NATSService) CacheBucket(name string, bucket nats.KeyValue) {
 	n.bucketsMutex.Lock()
 	defer n.bucketsMutex.Unlock()
@@ -233,20 +237,17 @@ func (n *NATSService) Start(msgHandlers map[string]nats.MsgHandler) error {
 func (n *NATSService) runHeartbeat() error {
 	var err error
 
+	ticker := time.NewTicker(100 * time.Millisecond)
+
 	for {
+		<-ticker.C
+
 		// Publish heartbeat
 		_, err = n.buckets[HeartbeatBucket].Put(n.params.NodeID, []byte("I'm alive!"))
 		if err != nil {
 			n.log.Errorf("unable to write heartbeat kv: %s", err)
-			break
 		}
-
-		time.Sleep(1 * time.Second)
 	}
-
-	n.log.Debug("heartbeat exiting")
-
-	return err
 }
 
 // GetStreams will get all defined streams. If a filter is provided, GetStreams
