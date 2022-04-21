@@ -38,8 +38,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 			if workerMap[streamInfo.StreamName] == nil {
 				workerMap[streamInfo.StreamName] = make(map[int]*Worker, 0)
 			}
-
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, cancel := context.WithCancel(context.Background())
 
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
 				WorkerID:  workerID,
