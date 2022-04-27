@@ -12,6 +12,10 @@ const (
 
 	CreateJob JobType = "create"
 	DeleteJob JobType = "delete"
+
+	PerStreamReadStrategy  = "workers-per-stream"
+	PerNodeReadStrategy    = "workers-per-node"
+	PerSubjectReadStrategy = "workers-per-subject"
 )
 
 type JobStatus string
@@ -42,11 +46,12 @@ type ReadSettings struct {
 	// WriteID should reference a completed write job
 	WriteID string `json:"write_id"`
 
-	NumStreams           int `json:"num_streams"`
-	NumNodes             int `json:"num_nodes"`
-	NumMessagesPerStream int `json:"num_messages_per_stream"`
-	NumWorkersPerStream  int `json:"num_workers_per_stream"`
-	BatchSize            int `json:"batch_size"`
+	NumStreams           int    `json:"num_streams"`
+	NumNodes             int    `json:"num_nodes"`
+	NumMessagesPerStream int    `json:"num_messages_per_stream"`
+	NumWorkersPerStream  int    `json:"num_workers_per_stream"`
+	BatchSize            int    `json:"batch_size"`
+	Strategy             string `json:"strategy"`
 
 	// Filled out by bench.GenerateCreateJobs
 	Streams []*StreamInfo `json:"streams,omitempty"`

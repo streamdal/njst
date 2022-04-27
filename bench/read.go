@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	MonitorFrequency   = time.Second
+	MonitorFrequency   = 100 * time.Millisecond
 	MaxErrorsPerWorker = 100
 )
 
@@ -28,6 +29,17 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 	if len(job.Settings.Read.Streams) == 0 {
 		return nil, errors.New("no streams to read from")
+	}
+
+	switch job.Settings.Read.Strategy {
+	case PerStreamReadStrategy:
+		b.launchWorkersPerStream()
+	case PerNodeReadStrategy:
+		b.launchWorkersPerNodeStrategy()
+	case b.PerSubjectStrategy:
+		b.launchWorkersPerSubjectStrategy()
+	default:
+		return nil, fmt.Errorf("unknown strategy '%s'", job.Settings.Read.Strategy)
 	}
 
 	workerMap := make(map[string]map[int]*Worker, 0)
@@ -154,19 +166,19 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 
 	llog.Debugf("worker starting; read settings %+v", job.Settings.Read)
 
-	//conn, err := b.nats.NewConn()
-	//if err != nil {
-	//	llog.Errorf("error creating nats connection: %s", err)
-	//	return
-	//}
-	//
-	//js, err := conn.JetStream()
-	//if err != nil {
-	//	llog.Errorf("error creating jetstream context: %s", err)
-	//	return
-	//}
+	conn, err := b.nats.NewConn()
+	if err != nil {
+		llog.Errorf("error creating nats connection: %s", err)
+		return
+	}
 
-	sub, err := b.nats.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
+	js, err := conn.JetStream()
+	if err != nil {
+		llog.Errorf("error creating jetstream context: %s", err)
+		return
+	}
+
+	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
 	if err != nil {
 		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
 		worker.Errors = append(worker.Errors, err.Error())
@@ -174,6 +186,8 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 
 		return
 	}
+
+	js.Subscribe()
 
 	defer func() {
 		if err := sub.Unsubscribe(); err != nil {
@@ -192,7 +206,16 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 				break
 			}
 
-			llog.Errorf("unable to fetch message(s): %s", err)
+			pendingStr := "N/A"
+
+			pending, _, err := sub.Pending()
+			if err != nil {
+				llog.Errorf("unable to get pending: %s", err)
+			} else {
+				pendingStr = fmt.Sprintf("%d", pending)
+			}
+
+			llog.Errorf("unable to fetch message(s) (pending: %s): %s", err, pendingStr)
 
 			worker.NumErrors++
 

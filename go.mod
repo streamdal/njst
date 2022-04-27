@@ -9,7 +9,7 @@ require (
 	github.com/google/pprof v0.0.0-20220412212628-83db2b799d1f // indirect
 	github.com/ianlancetaylor/demangle v0.0.0-20220319035150-800ac71e25c2 // indirect
 	github.com/julienschmidt/httprouter v1.3.0
-	github.com/nats-io/nats.go v1.13.0
+	github.com/nats-io/nats.go v1.14.0
 	github.com/pkg/errors v0.9.1
 	github.com/satori/go.uuid v1.2.0 // indirect
 	github.com/sirupsen/logrus v1.8.1
