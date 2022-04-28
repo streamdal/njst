@@ -336,6 +336,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 			NodeID: nodes[i],
 			Settings: &types.Settings{
 				ID:          settings.ID,
+				NATS:        settings.NATS,
 				Description: settings.Description,
 				Read: &types.ReadSettings{
 					NumMessagesPerStream: settings.Read.NumMessagesPerStream,
@@ -416,6 +417,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 		jobs = append(jobs, &types.Job{
 			NodeID: nodes[i],
 			Settings: &types.Settings{
+				NATS:        settings.NATS,
 				ID:          settings.ID,
 				Description: settings.Description,
 				Write: &types.WriteSettings{

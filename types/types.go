@@ -22,11 +22,17 @@ type JobStatus string
 
 type Settings struct {
 	Description string         `json:"description,omitempty"`
+	NATS        *NATS          `json:"nats"`
 	Write       *WriteSettings `json:"write,omitempty"`
 	Read        *ReadSettings  `json:"read,omitempty"`
 
 	// Set by handler
 	ID string `json:"id,omitempty"`
+}
+
+type NATS struct {
+	Address             string `json:"address"`
+	ConnectionPerStream bool   `json:"connection_per_stream"`
 }
 
 type WriteSettings struct {

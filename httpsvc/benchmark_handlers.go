@@ -160,6 +160,10 @@ func validateSettings(settings *types.Settings) error {
 		return errors.New("settings cannot be nil")
 	}
 
+	if settings.NATS == nil {
+		return errors.New("nats settings cannot be nil")
+	}
+
 	if settings.Read == nil && settings.Write == nil {
 		return errors.New("read or write settings must be set")
 	}

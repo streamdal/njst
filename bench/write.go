@@ -34,12 +34,41 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	go b.runReporter(doneCh, job, workerMap)
 
 	wg := &sync.WaitGroup{}
+	var js nats.JetStreamContext
 
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 
+	if !job.Settings.NATS.ConnectionPerStream {
+		nc, err := b.nats.NewConn(job.Settings.NATS)
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to create nats connection for job %s", job.Settings.ID)
+		}
+
+		defer nc.Close()
+
+		js, err = nc.JetStream()
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to create jetstream context for job %s", job.Settings.ID)
+		}
+	}
+
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
+		if job.Settings.NATS.ConnectionPerStream {
+			nc, err := b.nats.NewConn(job.Settings.NATS)
+			if err != nil {
+				return nil, errors.Wrapf(err, "unable to create nats connection for subject %s", subj)
+			}
+
+			defer nc.Close()
+
+			js, err = nc.JetStream()
+			if err != nil {
+				return nil, errors.Wrapf(err, "unable to create jetstream context for subject %s", subj)
+			}
+		}
+
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
 			if _, ok := workerMap[subj]; !ok {
 				workerMap[subj] = make(map[int]*Worker, 0)
@@ -55,9 +84,9 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 			// Last worker gets remaining messages
 			if i == job.Settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(job.Context, js, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
 			} else {
-				go b.runWriterWorker(job.Context, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(job.Context, js, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
 			}
 		}
 	}
@@ -72,7 +101,7 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
 }
 
-func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, data []byte, numMessages int, stats *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(ctx context.Context, js nats.JetStreamContext, workerID int, subj string, data []byte, numMessages int, stats *Worker, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	llog := b.log.WithFields(logrus.Fields{
@@ -84,7 +113,7 @@ func (b *Bench) runWriterWorker(ctx context.Context, workerID int, subj string, 
 	llog.Debug("worker starting")
 
 	for i := 0; i < numMessages; i++ {
-		err := b.nats.Publish(subj, data, nats.Context(ctx))
+		_, err := js.Publish(subj, data, nats.Context(ctx))
 		if err != nil {
 			if strings.Contains(err.Error(), "context canceled") {
 				llog.Debug("worker context cancelled - '%d' published, '%d' errors", stats.NumWritten, stats.NumErrors)

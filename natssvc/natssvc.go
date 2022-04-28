@@ -113,8 +113,16 @@ func New(params *cli.Params) (*NATSService, error) {
 	}, nil
 }
 
-func (n *NATSService) NewConn() (*nats.Conn, error) {
-	return newConn(n.params)
+func (n *NATSService) NewConn(settings *types.NATS) (*nats.Conn, error) {
+	if settings == nil {
+		return nil, errors.New("settings cannot be nil")
+	}
+
+	return newConn(&cli.Params{
+		NATSAddress: []string{
+			settings.Address,
+		},
+	})
 }
 
 func (n *NATSService) CacheBucket(name string, bucket nats.KeyValue) {
