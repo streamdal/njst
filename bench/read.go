@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 const (
-	MonitorFrequency   = time.Second
+	MonitorFrequency   = 100 * time.Millisecond
 	MaxErrorsPerWorker = 100
 )
 
@@ -31,13 +32,45 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	}
 
 	workerMap := make(map[string]map[int]*Worker, 0)
-	var workerID int
+	var (
+		js       nats.JetStreamContext
+		workerID int
+	)
+
+	if !job.Settings.NATS.ConnectionPerStream {
+		nc, err := b.nats.NewConn(job.Settings.NATS)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create nats connection for job "+job.Settings.ID)
+		}
+
+		defer nc.Close()
+
+		js, err = nc.JetStream()
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to create jetstream context for job %s"+job.Settings.ID)
+		}
+	}
 
 	for _, streamInfo := range job.Settings.Read.Streams {
+		if job.Settings.NATS.ConnectionPerStream {
+			nc, err := b.nats.NewConn(job.Settings.NATS)
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create nats connection for stream "+streamInfo.StreamName)
+			}
+
+			defer nc.Close()
+
+			js, err = nc.JetStream()
+			if err != nil {
+				return nil, errors.Wrap(err, "failed to create jetstream context for stream "+streamInfo.StreamName)
+			}
+		}
+
 		for i := 0; i < job.Settings.Read.NumWorkersPerStream; i++ {
 			if workerMap[streamInfo.StreamName] == nil {
 				workerMap[streamInfo.StreamName] = make(map[int]*Worker, 0)
 			}
+
 			ctx, cancel := context.WithCancel(context.Background())
 
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
@@ -50,7 +83,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 			wg.Add(1)
 
-			go b.runReaderWorker(job, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
+			go b.runReaderWorker(job, js, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
 
 			workerID++
 		}
@@ -140,7 +173,7 @@ func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[strin
 	return numRead
 }
 
-func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
 	defer func() {
 		worker.EndedAt = time.Now()
 		wg.Done()
@@ -152,21 +185,9 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 		"job_id":    job.Settings.ID,
 	})
 
-	llog.Debugf("worker starting; read settings %+v", job.Settings.Read)
+	llog.Debugf("worker starting")
 
-	//conn, err := b.nats.NewConn()
-	//if err != nil {
-	//	llog.Errorf("error creating nats connection: %s", err)
-	//	return
-	//}
-	//
-	//js, err := conn.JetStream()
-	//if err != nil {
-	//	llog.Errorf("error creating jetstream context: %s", err)
-	//	return
-	//}
-
-	sub, err := b.nats.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
+	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
 	if err != nil {
 		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
 		worker.Errors = append(worker.Errors, err.Error())
@@ -192,7 +213,16 @@ func (b *Bench) runReaderWorker(job *types.Job, workerID int, streamInfo *types.
 				break
 			}
 
-			llog.Errorf("unable to fetch message(s): %s", err)
+			pendingStr := "N/A"
+
+			pending, _, pendingErr := sub.Pending()
+			if pendingErr != nil {
+				llog.Errorf("unable to get pending: %s", err)
+			} else {
+				pendingStr = fmt.Sprintf("%d", pending)
+			}
+
+			llog.Errorf("unable to fetch message(s) (pending: %s): %s", pendingStr, err)
 
 			worker.NumErrors++
 
