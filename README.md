@@ -6,6 +6,9 @@ _distributed_ benchmark and testing tool.
 [Batch.sh](https://batch.sh) makes significant use of NATS JetStream and we use
 this tool to run periodic benchmarks on our internal NATS JS clusters.
 
+While `njst` supports read and write testing, it is primarily geared towards
+testing reads with durable consumers.
+
 **NOTE: While benchmarks are dumb, this will at least give you a _general_ idea 
 about the performance capabilities of your NATS cluster.**
 
@@ -19,9 +22,32 @@ about the performance capabilities of your NATS cluster.**
 
 ## Usage
 
-1. Modify and use the following [k8s deploy config](./deploy.dev.yaml) to deploy 3+ `nsjt` instance(s)
-   to your kubernetes cluster.
-    1. `kubectl apply -f deploy.dev.yaml`
+`njst` uses NATS internally to keep track of `njst` nodes and results. For this
+reason, you will need to bring up a NATS instance in your env and point `njst`
+node(s) to it via env vars or flags.
+
+### Local
+
+1. Bring up a NATS instance via docker-compose
+   1. `docker-compose up -d`
+2. Run 2 instances of `njst`
+   1. Open terminal one: `go run main.go --debug --http-address=:5000`
+   2. Open terminal two: `go run main.go --debug --http-address=:5001`
+3. Verify that both `njst` nodes are in the cluster: 
+   ```bash
+      ❯ curl --request GET --url http://localhost:5000/cluster
+      {"nodes":["489e8fd7","6ebcb9bb"],"count":2}
+   ```
+4. Perform a test
+   ```bash
+   ```
+
+### Production
+
+1. Modify and use the following [k8s deploy config](./deploy.dev.yaml) to deploy
+   3+ `nsjt` instance(s) to your kubernetes cluster.
+    1. Update NATS env vars to point to your NATS cluster
+    2. `kubectl apply -f deploy.dev.yaml`
 2. Talk to any of the `njst` nodes via the [HTTP API](docs/api.md) to manage jobs
 
 NOTE: To do anything useful with `njst`, you'll want to be able to talk to its API.
@@ -70,6 +96,10 @@ that are currently connected to the cluster
 ```json
 {
 	"description": "heavy",
+    "nats": {
+        "address": "127.0.0.1",
+        "connection_per_stream": false
+    },
 	"write": {
 		"num_nodes": 3,
 		"num_streams": 16,
@@ -91,6 +121,10 @@ that are currently connected to the cluster
 ```json
 {
 	"description": "heavy read test",
+    "nats": {
+        "address": "127.0.0.1",
+        "connection_per_stream": false
+    },
 	"read": {
 		"write_id": "i1mSzcm8", <--- write id from previous write test
 		"num_nodes": 3,
@@ -123,6 +157,10 @@ that are currently connected to the cluster
 	},
 	"settings": {
 		"description": "medium read test with workermap",
+        "nats": {
+            "address": "127.0.0.1",
+            "connection_per_stream": false
+         },
 		"read": {
 			"write_id": "i1mSzcm8",
 			"num_streams": 16,

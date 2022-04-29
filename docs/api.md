@@ -46,13 +46,17 @@
     ```json
     {
       "description": "medium read test",
+      "nats": {                           
+        "address": "127.0.0.1",           // Defines which NATS cluster the benchmark will be ran on
+        "connection_per_stream": false    // Whether njst will create a new NATS connection per stream
+      },
       "read": {
         "write_id": "9iN0iDE8",
-        "num_nodes": 1,
-        "num_streams": 4,
-        "num_messages_per_stream": 10000,
-        "num_workers_per_stream": 1,
-        "batch_size": 1000
+        "num_nodes": 1,                   // How many njst nodes should the benchmark run on; 0 == all
+        "num_streams": 4,                 // How many streams to create
+        "num_messages_per_stream": 10000, // Approximately how many messages to read per stream
+        "num_workers_per_stream": 1,      // How many dedicated workers njst will use per stream
+        "batch_size": 100                 // How many messages to try to read at a time
       }
     }
     ```
@@ -60,13 +64,17 @@
     ```json
     {
       "description": "heavy write test",
+      "nats": {
+        "address": "127.0.0.1",
+        "connection_per_stream": false
+      },
       "write": {
         "num_nodes": 1,
         "num_streams": 10,
         "num_messages_per_stream": 100000,
         "num_workers_per_stream": 4,
         "msg_size_bytes": 1024,
-        "keep_streams": true
+        "keep_streams": true              // Whether to keep the streams after the benchmark is done; by default, streams are deleted
       }
     }
     ```
@@ -78,20 +86,25 @@
 * **Sample response**:
 ```json
 {
-	"status": {
-		"status": "in-progress",
-		"message": "benchmark is in progress",
-		"job_id": "NFG9zrdi",
-		"node_id": "cf31e536",
-		"elapsed_seconds": 45,
-		"avg_msg_per_sec": 894,
-		"total_processed": 40231,
-		"total_errors": 0,
-		"started_at": "2022-04-02T23:02:51.909912-07:00",
-		"ended_at": "0001-01-01T00:00:00Z"
-	},
+    "status": {
+      "status": "in-progress",
+      "message": "benchmark is in progress; ticker",
+      "job_id": "7HTnAX19",
+      "node_id": "57ac570a",
+      "elapsed_seconds": 22,
+      "avg_msg_per_sec_per_node": 18180.28,
+      "avg_msg_per_sec_all_nodes": 18180.28,
+      "total_processed": 100000,
+      "total_errors": 0,
+      "started_at": "2022-04-27T21:32:10.661846-07:00",
+      "ended_at": "2022-04-27T21:32:32.562739-07:00"
+    },
 	"settings": {
 		"description": "heavy write test",
+        "nats": {
+          "address": "127.0.0.1",
+          "connection_per_stream": false
+        },
 		"write": {
 			"num_streams": 10,
 			"num_nodes": 1,
