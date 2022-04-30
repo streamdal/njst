@@ -52,20 +52,21 @@ type ReadSettings struct {
 	// WriteID should reference a completed write job
 	WriteID string `json:"write_id"`
 
-	NumStreams           int    `json:"num_streams"`
-	NumNodes             int    `json:"num_nodes"`
-	NumMessagesPerStream int    `json:"num_messages_per_stream"`
-	NumWorkersPerStream  int    `json:"num_workers_per_stream"`
-	BatchSize            int    `json:"batch_size"`
-	Strategy             string `json:"strategy"`
+	NumStreams           int      `json:"num_streams"`
+	NumNodes             int      `json:"num_nodes"`
+	Nodes                []string `json:"nodes"`
+	NumMessagesPerStream int      `json:"num_messages_per_stream"`
+	NumWorkersPerStream  int      `json:"num_workers_per_stream"`
+	BatchSize            int      `json:"batch_size"`
+	Strategy             string   `json:"strategy"`
 
 	// Filled out by bench.GenerateCreateJobs
 	Streams []*StreamInfo `json:"streams,omitempty"`
 }
 
 type StreamInfo struct {
-	StreamName        string
-	ConsumerGroupName string
+	StreamName  string
+	DurableName string
 }
 
 type StatusResponse struct {
@@ -74,18 +75,19 @@ type StatusResponse struct {
 }
 
 type Status struct {
-	Status               JobStatus `json:"status"`
-	Message              string    `json:"message"`
-	Errors               []string  `json:"errors,omitempty"`
-	JobID                string    `json:"job_id"`
-	NodeID               string    `json:"node_id"`
-	ElapsedSeconds       float64   `json:"elapsed_seconds"`
-	AvgMsgPerSecPerNode  float64   `json:"avg_msg_per_sec_per_node"`
-	AvgMsgPerSecAllNodes float64   `json:"avg_msg_per_sec_all_nodes"`
-	TotalProcessed       int       `json:"total_processed"`
-	TotalErrors          int       `json:"total_errors"`
-	StartedAt            time.Time `json:"started_at"`
-	EndedAt              time.Time `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
+	Status                 JobStatus `json:"status"`
+	Message                string    `json:"message"`
+	Errors                 []string  `json:"errors,omitempty"`
+	JobID                  string    `json:"job_id"`
+	NodeID                 string    `json:"node_id,omitempty"`
+	ElapsedSeconds         float64   `json:"elapsed_seconds,omitempty"`
+	AvgMsgPerSecPerNode    float64   `json:"avg_msg_per_sec_per_node,omitempty"`
+	TotalMsgPerSecAllNodes float64   `json:"total_msg_per_sec_all_nodes,omitempty"`
+	AvgMsgPerSecAllNodes   float64   `json:"avg_msg_per_sec_all_nodes,omitempty"`
+	TotalProcessed         int       `json:"total_processed"`
+	TotalErrors            int       `json:"total_errors"`
+	StartedAt              time.Time `json:"started_at"`
+	EndedAt                time.Time `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
 }
 
 type JobType string

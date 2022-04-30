@@ -34,40 +34,34 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	go b.runReporter(doneCh, job, workerMap)
 
 	wg := &sync.WaitGroup{}
-	var js nats.JetStreamContext
+	//var js nats.JetStreamContext
 
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 
-	if !job.Settings.NATS.ConnectionPerStream {
-		nc, err := b.nats.NewConn(job.Settings.NATS)
-		if err != nil {
-			return nil, errors.Wrapf(err, "unable to create nats connection for job %s", job.Settings.ID)
-		}
-
-		defer nc.Close()
-
-		js, err = nc.JetStream()
-		if err != nil {
-			return nil, errors.Wrapf(err, "unable to create jetstream context for job %s", job.Settings.ID)
-		}
+	//if !job.Settings.NATS.ConnectionPerStream {
+	nc, err := b.nats.NewConn(job.Settings.NATS)
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to create nats connection for job %s", job.Settings.ID)
 	}
+
+	defer nc.Close()
 
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
-		if job.Settings.NATS.ConnectionPerStream {
-			nc, err := b.nats.NewConn(job.Settings.NATS)
-			if err != nil {
-				return nil, errors.Wrapf(err, "unable to create nats connection for subject %s", subj)
-			}
-
-			defer nc.Close()
-
-			js, err = nc.JetStream()
-			if err != nil {
-				return nil, errors.Wrapf(err, "unable to create jetstream context for subject %s", subj)
-			}
-		}
+		//if job.Settings.NATS.ConnectionPerStream {
+		//	nc, err := b.nats.NewConn(job.Settings.NATS)
+		//	if err != nil {
+		//		return nil, errors.Wrapf(err, "unable to create nats connection for subject %s", subj)
+		//	}
+		//
+		//	defer nc.Close()
+		//
+		//	js, err = nc.JetStream(nats.PublishAsyncMaxPending(200))
+		//	if err != nil {
+		//		return nil, errors.Wrapf(err, "unable to create jetstream context for subject %s", subj)
+		//	}
+		//}
 
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
 			if _, ok := workerMap[subj]; !ok {
@@ -75,18 +69,18 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 			}
 
 			workerMap[subj][i] = &Worker{
-				WorkerID:  i,
-				StartedAt: time.Now(),
-				Errors:    make([]string, 0),
+				WorkerID: i,
+				ch:       make(chan time.Time, 2),
+				Errors:   make([]string, 0),
 			}
 
 			wg.Add(1)
 
 			// Last worker gets remaining messages
 			if i == job.Settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(job.Context, js, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(job.Context, nc, job, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
 			} else {
-				go b.runWriterWorker(job.Context, js, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(job.Context, nc, job, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
 			}
 		}
 	}
@@ -97,12 +91,35 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	// Stop the reporter
 	doneCh <- struct{}{}
 
+	for stream := range workerMap {
+		for worker := range workerMap[stream] {
+			sa := <-workerMap[stream][worker].ch
+			ea := <-workerMap[stream][worker].ch
+			workerMap[stream][worker].StartedAt = sa
+			workerMap[stream][worker].EndedAt = ea
+		}
+	}
+
 	// Calculate the final status
 	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
 }
 
-func (b *Bench) runWriterWorker(ctx context.Context, js nats.JetStreamContext, workerID int, subj string, data []byte, numMessages int, stats *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.Job, workerID int, subj string, data []byte, numMessages int, worker *Worker, wg *sync.WaitGroup) {
 	defer wg.Done()
+	if job.Settings.NATS.ConnectionPerStream {
+		nc, err := b.nats.NewConn(job.Settings.NATS)
+		if err != nil {
+			b.log.Log(logrus.ErrorLevel, "can't get connection for connection per stream: ", err)
+			return
+		}
+
+		defer nc.Close()
+	}
+	js, err := nc.JetStream(nats.PublishAsyncMaxPending(200))
+	if err != nil {
+		b.log.Log(logrus.ErrorLevel, "can't get JS context in writeworker")
+		return
+	}
 
 	llog := b.log.WithFields(logrus.Fields{
 		"worker_id":   workerID,
@@ -111,42 +128,45 @@ func (b *Bench) runWriterWorker(ctx context.Context, js nats.JetStreamContext, w
 	})
 
 	llog.Debug("worker starting")
+	worker.ch <- time.Now()
 
 	for i := 0; i < numMessages; i++ {
-		_, err := js.Publish(subj, data, nats.Context(ctx))
+		//_, err := js.PublishAsync(subj, data, nats.Context(ctx))
+		_, err := js.PublishAsync(subj, data)
 		if err != nil {
 			if strings.Contains(err.Error(), "context canceled") {
-				llog.Debug("worker context cancelled - '%d' published, '%d' errors", stats.NumWritten, stats.NumErrors)
+				llog.Debug("worker context cancelled - '%d' published, '%d' errors", worker.NumWritten, worker.NumErrors)
 				return
 			}
 
 			llog.Errorf("unable to publish message: %s", err)
-			stats.NumErrors++
+			worker.NumErrors++
 
-			if stats.NumErrors > numMessages {
+			if worker.NumErrors > numMessages {
 				llog.Error("worker exiting prematurely due to too many errors")
 				break
 			}
 
-			stats.Errors = append(stats.Errors, err.Error())
+			worker.Errors = append(worker.Errors, err.Error())
 			continue
 		}
 
-		stats.NumWritten++
+		worker.NumWritten++
 	}
 
-	llog.Debugf("worker exiting; wrote '%d' messages", stats.NumWritten)
+	worker.ch <- time.Now()
+	llog.Debugf("worker exiting; wrote '%d' messages", worker.NumWritten)
 
-	stats.EndedAt = time.Now()
 }
 
 func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]map[int]*Worker, jobStatus types.JobStatus, msg string) *types.Status {
 	var (
-		maxElapsed     time.Duration
-		maxStartedAt   time.Time
-		maxEndedAt     time.Time
-		numProcessed   int
-		numErrorsTotal int
+		totalElapsed              time.Duration
+		minStartedAt              time.Time
+		maxEndedAt                time.Time
+		numProcessedTotal         int
+		numErrorsTotal            int
+		totalPerWorkGroupAverages float64
 	)
 
 	errs := make([]string, 0)
@@ -158,25 +178,34 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 	}
 
 	for _, workGroup := range workerMap {
+		var workerTotalElapsed time.Duration = 0 * time.Second
 		for _, worker := range workGroup {
-			elapsed := time.Now().Sub(worker.StartedAt)
+			workerElapsed := worker.EndedAt.Sub(worker.StartedAt)
+			workerTotalElapsed += workerElapsed
 
-			if elapsed > maxElapsed {
-				maxElapsed = elapsed
+			workerNumProcessed := func() int {
+				if settings.Read != nil {
+					return worker.NumRead
+				} else if settings.Write != nil {
+					return worker.NumWritten
+				}
+				b.log.Error("Job settings has neither read or write")
+				return 0
+			}()
+
+			numProcessedTotal += workerNumProcessed
+			totalPerWorkGroupAverages += float64(workerNumProcessed) / workerElapsed.Seconds()
+
+			if minStartedAt.IsZero() {
+				minStartedAt = worker.StartedAt
 			}
 
-			if worker.StartedAt.After(maxStartedAt) {
-				maxStartedAt = worker.StartedAt
+			if worker.StartedAt.Before(minStartedAt) {
+				minStartedAt = worker.StartedAt
 			}
 
 			if worker.EndedAt.After(maxEndedAt) {
 				maxEndedAt = worker.EndedAt
-			}
-
-			if settings.Read != nil {
-				numProcessed += worker.NumRead
-			} else if settings.Write != nil {
-				numProcessed += worker.NumWritten
 			}
 
 			numErrorsTotal += worker.NumErrors
@@ -184,8 +213,8 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 			if len(worker.Errors) > 0 {
 				errs = append(errs, worker.Errors...)
 			}
-
 		}
+		totalElapsed += workerTotalElapsed
 	}
 
 	// Cap of errors
@@ -193,7 +222,7 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 		errs = errs[:100]
 	}
 
-	avgMsgPerSec := float64(numProcessed) / maxElapsed.Seconds()
+	avgMsgPerSec := totalPerWorkGroupAverages / float64(len(workerMap))
 
 	return &types.Status{
 		NodeID:              b.params.NodeID,
@@ -201,11 +230,11 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 		Message:             message + msg,
 		Errors:              errs,
 		JobID:               settings.ID,
-		ElapsedSeconds:      maxElapsed.Seconds(),
+		ElapsedSeconds:      totalElapsed.Seconds(),
 		AvgMsgPerSecPerNode: avgMsgPerSec,
-		TotalProcessed:      numProcessed,
+		TotalProcessed:      numProcessedTotal,
 		TotalErrors:         numErrorsTotal,
-		StartedAt:           maxStartedAt,
+		StartedAt:           minStartedAt,
 		EndedAt:             maxEndedAt,
 	}
 }

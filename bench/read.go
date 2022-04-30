@@ -62,7 +62,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 			js, err = nc.JetStream()
 			if err != nil {
-				return nil, errors.Wrap(err, "failed to create jetstream context for stream "+streamInfo.StreamName)
+				return nil, errors.Wrap(err, "failed to create JetStream context. Stream="+streamInfo.StreamName)
 			}
 		}
 
@@ -74,11 +74,11 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 			ctx, cancel := context.WithCancel(context.Background())
 
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
-				WorkerID:  workerID,
-				StartedAt: time.Now(),
-				Errors:    make([]string, 0),
-				ctx:       ctx,    // Worker specific context; read from by worker
-				cancel:    cancel, // Worker specific cancel; used by monitor to signal worker to stop
+				WorkerID: workerID,
+				ch:       make(chan time.Time, 2),
+				Errors:   make([]string, 0),
+				ctx:      ctx,    // Worker specific context; read from by worker
+				cancel:   cancel, // Worker specific cancel; used by monitor to signal worker to stop
 			}
 
 			wg.Add(1)
@@ -101,9 +101,18 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	// Stop reporter & monitor
 	close(doneCh)
 
+	for stream := range workerMap {
+		for worker := range workerMap[stream] {
+			sa := <-workerMap[stream][worker].ch
+			ea := <-workerMap[stream][worker].ch
+			workerMap[stream][worker].StartedAt = sa
+			workerMap[stream][worker].EndedAt = ea
+		}
+	}
+
 	// Hack: It's possible other nodes are lagging behind this node - wait a little bit
 	// before we write final status
-	time.Sleep(5 * time.Second)
+	//time.Sleep(1 * time.Second)
 
 	// Calculate the final status
 	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
@@ -175,7 +184,6 @@ func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[strin
 
 func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
 	defer func() {
-		worker.EndedAt = time.Now()
 		wg.Done()
 	}()
 
@@ -187,7 +195,7 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 
 	llog.Debugf("worker starting")
 
-	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
+	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.DurableName)
 	if err != nil {
 		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
 		worker.Errors = append(worker.Errors, err.Error())
@@ -202,10 +210,22 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 		}
 	}()
 
-	for {
-		llog.Debugf("worker has read %d messages", worker.NumRead)
+	targetNumberOfReads := job.Settings.Read.NumMessagesPerStream / job.Settings.Read.NumWorkersPerStream
 
-		msgs, err := sub.Fetch(job.Settings.Read.BatchSize, nats.Context(worker.ctx))
+	worker.ch <- time.Now()
+
+	for worker.NumRead < targetNumberOfReads {
+		llog.Debugf("worker has read %d messages out of %d", worker.NumRead, targetNumberOfReads)
+
+		batchSize := func() int {
+			if job.Settings.Read.BatchSize <= (targetNumberOfReads - worker.NumRead) {
+				return job.Settings.Read.BatchSize
+			} else {
+				return targetNumberOfReads - worker.NumRead
+			}
+		}()
+
+		msgs, err := sub.Fetch(batchSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "context canceled") {
 				llog.Debug("worker asked to exit")
@@ -213,6 +233,9 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 				break
 			}
 
+			if err == nats.ErrTimeout {
+				llog.Warn("Fetch timeout")
+			}
 			pendingStr := "N/A"
 
 			pending, _, pendingErr := sub.Pending()
@@ -245,6 +268,7 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 			worker.NumRead++
 		}
 	}
+	worker.ch <- time.Now()
 
 	llog.Debugf("worker exiting; '%d' read, '%d' errors", worker.NumRead, worker.NumErrors)
 }
