@@ -36,7 +36,6 @@ setup/linux:
 setup/darwin: description = Install dev tools for darwin
 setup/darwin:
 	GO111MODULE=off go get github.com/maxbrunsfeld/counterfeiter
-	brew install doctl
 
 .PHONY: run
 run: description = Run $(SERVICE)
@@ -114,7 +113,7 @@ docker/push:
 .PHONY: kube/deploy/dev
 kube/deploy/dev: description = Deploy image to kubernetes cluster
 kube/deploy/dev:
-	doctl kubernetes cluster kubeconfig save do-dev && \
+	gcloud container clusters get-credentials batch-dev-cluster --region us-west2 --project boxwood-reach-279120 && \
 	cat deploy.dev.yaml | \
 	sed "s/{{VERSION}}/$(VERSION)/g" | \
 	sed "s/{{SERVICE}}/$(SERVICE)/g" | \
