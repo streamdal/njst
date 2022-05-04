@@ -44,7 +44,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 			return nil, errors.Wrap(err, "failed to create single shared nats connection for job "+job.Settings.ID)
 		}
 
-		defer nc.Close()
+		defer nc.Drain()
 	}
 
 	for _, streamInfo := range job.Settings.Read.Streams {
