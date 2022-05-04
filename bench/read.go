@@ -98,7 +98,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	//time.Sleep(1 * time.Second)
 
 	// Calculate the final status
-	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
+	return b.calculateStats(job.Settings, job.NodeID, workerMap, types.CompletedStatus, "; final"), nil
 }
 
 func (b *Bench) runReaderMonitor(doneCh chan struct{}, job *types.Job, workerMap map[string]map[int]*Worker) {

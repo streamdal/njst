@@ -75,20 +75,38 @@ type StatusResponse struct {
 	Settings *Settings `json:"settings"`
 }
 
+type WorkerReport struct {
+	WorkerID       string
+	Processed      int     `json:"processed"`
+	Errors         int     `json:"errors"`
+	ElapsedSeconds float64 `json:"elapsed_seconds,omitempty"`
+	AvgMsgPerSec   float64 `json:"avg_msg_per_sec,omitempty"`
+}
+
+type StreamReport struct {
+	Workers []WorkerReport `json:"workers,omitempty"`
+}
+
+type NodeReport struct {
+	Streams []StreamReport `json:"streams,omitempty"`
+}
+
 type Status struct {
-	Status                 JobStatus `json:"status"`
-	Message                string    `json:"message"`
-	Errors                 []string  `json:"errors,omitempty"`
-	JobID                  string    `json:"job_id"`
-	NodeID                 string    `json:"node_id,omitempty"`
-	ElapsedSeconds         float64   `json:"elapsed_seconds,omitempty"`
-	AvgMsgPerSecPerNode    float64   `json:"avg_msg_per_sec_per_node,omitempty"`
-	TotalMsgPerSecAllNodes float64   `json:"total_msg_per_sec_all_nodes,omitempty"`
-	AvgMsgPerSecAllNodes   float64   `json:"avg_msg_per_sec_all_nodes,omitempty"`
-	TotalProcessed         int       `json:"total_processed"`
-	TotalErrors            int       `json:"total_errors"`
-	StartedAt              time.Time `json:"started_at"`
-	EndedAt                time.Time `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
+	Status                 JobStatus    `json:"status"`
+	Message                string       `json:"message"`
+	Errors                 []string     `json:"errors,omitempty"`
+	JobID                  string       `json:"job_id"`
+	NodeID                 string       `json:"node_id,omitempty"`
+	ElapsedSeconds         float64      `json:"elapsed_seconds,omitempty"`
+	AvgMsgPerSecPerNode    float64      `json:"avg_msg_per_sec_per_node,omitempty"`
+	TotalMsgPerSecAllNodes float64      `json:"total_msg_per_sec_all_nodes,omitempty"`
+	AvgMsgPerSecAllNodes   float64      `json:"avg_msg_per_sec_all_nodes,omitempty"`
+	TotalProcessed         int          `json:"total_processed"`
+	TotalErrors            int          `json:"total_errors"`
+	StartedAt              time.Time    `json:"started_at"`
+	EndedAt                time.Time    `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
+	NodeReport             NodeReport   `json:"node_report,omitempty"`
+	NodeReports            []NodeReport `json:"node_reports,omitempty"`
 }
 
 type JobType string

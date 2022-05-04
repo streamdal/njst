@@ -144,8 +144,9 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 
 	var totalPerNodeAverages = float64(0)
 	var totalNumberOfNodesReporting = 0
+	nodeReports := make([]types.NodeReport, len(keys))
 
-	for _, key := range keys {
+	for i, key := range keys {
 		b.log.Debugf("looking up results in bucket '%s', object '%s'", fullBucketName, key)
 
 		entry, err := bucket.Get(key)
@@ -185,12 +186,18 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 		if s.EndedAt.After(finalStatus.EndedAt) {
 			finalStatus.EndedAt = s.EndedAt
 		}
+
+		nodeReports[i] = types.NodeReport{
+			Streams: s.NodeReport.Streams,
+		}
 	}
 
 	// Make stats more readable
 	finalStatus.ElapsedSeconds = round(finalStatus.EndedAt.Sub(finalStatus.StartedAt).Seconds(), 2)
 	finalStatus.TotalMsgPerSecAllNodes = round(totalPerNodeAverages, 2)
 	finalStatus.AvgMsgPerSecPerNode = round(totalPerNodeAverages/float64(totalNumberOfNodesReporting), 2)
+
+	finalStatus.NodeReports = nodeReports
 
 	return finalStatus, nil
 }
@@ -324,7 +331,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 				Read: &types.ReadSettings{
 					NumStreams:           settings.Read.NumStreams,
 					NumNodes:             numSelectedNodes,
-					NumMessagesPerStream: settings.Read.NumMessagesPerStream / numSelectedNodes,
+					NumMessagesPerStream: settings.Read.NumMessagesPerStream,
 					NumWorkersPerStream:  settings.Read.NumWorkersPerStream,
 					Streams:              streamInfo,
 					BatchSize:            settings.Read.BatchSize,
@@ -379,6 +386,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	} else {
 		numSelectedNodes = settings.Write.NumNodes
 	}
+	settings.Write.NumNodes = numSelectedNodes
 
 	for i := 0; i < numSelectedNodes; i++ {
 
@@ -391,11 +399,11 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 				Write: &types.WriteSettings{
 					NumStreams:           settings.Write.NumStreams,
 					NumNodes:             settings.Write.NumNodes,
-					NumMessagesPerStream: settings.Write.NumMessagesPerStream / settings.Write.NumNodes,
+					NumMessagesPerStream: settings.Write.NumMessagesPerStream,
 					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
 					MsgSizeBytes:         settings.Write.MsgSizeBytes,
 					KeepStreams:          settings.Write.KeepStreams,
-					Subjects:             generateSubjects(settings.Write.NumStreams, streamPrefix),
+					Subjects:             generateStreams(settings.Write.NumStreams, streamPrefix),
 				},
 			},
 			CreatedBy: b.params.NodeID,
@@ -406,14 +414,14 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	return jobs, nil
 }
 
-func generateSubjects(numSubjects int, subjectPrefix string) []string {
-	subjects := make([]string, 0)
+func generateStreams(numStreams int, streamPrefix string) []string {
+	streams := make([]string, 0)
 
-	for i := 0; i != numSubjects; i++ {
-		subjects = append(subjects, fmt.Sprintf("%s-%d", subjectPrefix, i))
+	for i := 0; i != numStreams; i++ {
+		streams = append(streams, fmt.Sprintf("%s-%d", streamPrefix, i))
 	}
 
-	return subjects
+	return streams
 }
 
 func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, error) {
@@ -426,13 +434,6 @@ func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, erro
 
 	if settings.Read != nil {
 		jobs, err = b.createReadJobs(settings)
-		fmt.Printf("%d Read jobs created", len(jobs))
-		for _, j := range jobs {
-			fmt.Printf("Job Node ID: %s\n", j.NodeID)
-
-			println("Read job")
-			fmt.Printf("nodes: %d, streams: %d, messages/stream: %d, workers/stream: %d", j.Settings.Read.NumNodes, j.Settings.Read.NumStreams, j.Settings.Read.NumMessagesPerStream, j.Settings.Read.NumWorkersPerStream)
-		}
 	} else if settings.Write != nil {
 		jobs, err = b.createWriteJobs(settings)
 		fmt.Printf("%d write jobs created", len(jobs))

@@ -2,6 +2,7 @@ package bench
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -34,7 +35,7 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 	wg := &sync.WaitGroup{}
 
-	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
+	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / (job.Settings.Write.NumNodes * job.Settings.Write.NumWorkersPerStream)
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 	var nc *nats.Conn
 
@@ -86,7 +87,7 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	}
 
 	// Calculate the final status
-	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
+	return b.calculateStats(job.Settings, job.NodeID, workerMap, types.CompletedStatus, "; final"), nil
 }
 
 func min(a, b int) int {
@@ -181,7 +182,7 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 
 }
 
-func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]map[int]*Worker, jobStatus types.JobStatus, msg string) *types.Status {
+func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMap map[string]map[int]*Worker, jobStatus types.JobStatus, msg string) *types.Status {
 	var (
 		totalElapsed              time.Duration
 		minStartedAt              time.Time
@@ -199,10 +200,14 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 		message = "benchmark completed"
 	}
 
-	for _, workGroup := range workerMap {
+	var streamReports []types.StreamReport
+	for i, stream := range workerMap {
+		workerReports := make([]types.WorkerReport, len(workerMap[i]))
 		var workerTotalElapsed time.Duration = 0 * time.Second
-		for _, worker := range workGroup {
+		for j, worker := range stream {
+			report := types.WorkerReport{WorkerID: fmt.Sprintf("%s-%s-%d", nodeId, i, worker.WorkerID)}
 			workerElapsed := worker.EndedAt.Sub(worker.StartedAt)
+			report.ElapsedSeconds = workerElapsed.Seconds()
 			workerTotalElapsed += workerElapsed
 
 			workerNumProcessed := func() int {
@@ -215,8 +220,16 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 				return 0
 			}()
 
+			report.Processed = workerNumProcessed
 			numProcessedTotal += workerNumProcessed
-			totalPerWorkGroupAverages += float64(workerNumProcessed) / workerElapsed.Seconds()
+			report.AvgMsgPerSec = float64(workerNumProcessed) / workerElapsed.Seconds()
+			totalPerWorkGroupAverages += report.AvgMsgPerSec
+
+			report.Errors = worker.NumErrors
+			numErrorsTotal += worker.NumErrors
+			if len(worker.Errors) > 0 {
+				errs = append(errs, worker.Errors...)
+			}
 
 			if minStartedAt.IsZero() {
 				minStartedAt = worker.StartedAt
@@ -229,14 +242,10 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 			if worker.EndedAt.After(maxEndedAt) {
 				maxEndedAt = worker.EndedAt
 			}
-
-			numErrorsTotal += worker.NumErrors
-
-			if len(worker.Errors) > 0 {
-				errs = append(errs, worker.Errors...)
-			}
+			workerReports[j] = report
 		}
 		totalElapsed += workerTotalElapsed
+		streamReports = append(streamReports, types.StreamReport{Workers: workerReports})
 	}
 
 	// Cap of errors
@@ -258,5 +267,8 @@ func (b *Bench) calculateStats(settings *types.Settings, workerMap map[string]ma
 		TotalErrors:         numErrorsTotal,
 		StartedAt:           minStartedAt,
 		EndedAt:             maxEndedAt,
+		NodeReport: types.NodeReport{
+			Streams: streamReports,
+		},
 	}
 }
