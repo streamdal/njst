@@ -2,7 +2,6 @@ package bench
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -34,35 +33,21 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	go b.runReporter(doneCh, job, workerMap)
 
 	wg := &sync.WaitGroup{}
-	//var js nats.JetStreamContext
 
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / job.Settings.Write.NumWorkersPerStream
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
+	var nc *nats.Conn
 
-	//if !job.Settings.NATS.ConnectionPerStream {
-	nc, err := b.nats.NewConn(job.Settings.NATS)
-	if err != nil {
-		return nil, errors.Wrapf(err, "unable to create nats connection for job %s", job.Settings.ID)
+	if job.Settings.NATS.SharedConnection {
+		nc, err = b.nats.NewConn(job.Settings.NATS)
+		if err != nil {
+			return nil, errors.Wrapf(err, "unable to create nats connection for job %s", job.Settings.ID)
+		}
+
+		defer nc.Drain()
 	}
-
-	defer nc.Close()
-
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
-		//if job.Settings.NATS.ConnectionPerStream {
-		//	nc, err := b.nats.NewConn(job.Settings.NATS)
-		//	if err != nil {
-		//		return nil, errors.Wrapf(err, "unable to create nats connection for subject %s", subj)
-		//	}
-		//
-		//	defer nc.Close()
-		//
-		//	js, err = nc.JetStream(nats.PublishAsyncMaxPending(200))
-		//	if err != nil {
-		//		return nil, errors.Wrapf(err, "unable to create jetstream context for subject %s", subj)
-		//	}
-		//}
-
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
 			if _, ok := workerMap[subj]; !ok {
 				workerMap[subj] = make(map[int]*Worker, 0)
@@ -104,20 +89,42 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.Job, workerID int, subj string, data []byte, numMessages int, worker *Worker, wg *sync.WaitGroup) {
+	var batchSize = job.Settings.Write.BatchSize
+	if batchSize == 0 {
+		batchSize = 100
+	} // TODO find out why the batch size doesn't set to default in WriteSettings like it does in ReadSettings
+
+	var myNC = nc
+	var err error
+
 	defer wg.Done()
-	if job.Settings.NATS.ConnectionPerStream {
-		nc, err := b.nats.NewConn(job.Settings.NATS)
+
+	if !job.Settings.NATS.SharedConnection {
+		myNC, err = b.nats.NewConn(job.Settings.NATS)
 		if err != nil {
-			b.log.Log(logrus.ErrorLevel, "can't get connection for connection per stream: ", err)
+			b.log.Log(logrus.ErrorLevel, "can't get connection for connection per worker: ", err)
 			return
 		}
 
-		defer nc.Close()
+		defer myNC.Drain()
+	} else if nc == nil {
+		b.log.Error("worker not passed a valid NATS Connection and connection per worker specified")
+		return
 	}
-	js, err := nc.JetStream(nats.PublishAsyncMaxPending(200))
+
+	//js, err := nc.JetStream(nats.PublishAsyncMaxPending(batchSize))
+	// No need to rely on the context Max pub async setting for flow control as now checking the puback futures in batches
+	js, err := myNC.JetStream()
 	if err != nil {
-		b.log.Log(logrus.ErrorLevel, "can't get JS context in writeworker")
+		b.log.Log(logrus.ErrorLevel, "can't get JS context in WriteWorker")
 		return
 	}
 
@@ -130,28 +137,43 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 	llog.Debug("worker starting")
 	worker.ch <- time.Now()
 
-	for i := 0; i < numMessages; i++ {
-		//_, err := js.PublishAsync(subj, data, nats.Context(ctx))
-		_, err := js.PublishAsync(subj, data)
-		if err != nil {
-			if strings.Contains(err.Error(), "context canceled") {
-				llog.Debug("worker context cancelled - '%d' published, '%d' errors", worker.NumWritten, worker.NumErrors)
-				return
+	for i := 0; i < numMessages; i += batchSize {
+		futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
+		for j := 0; j < batchSize && i+j < numMessages; j++ {
+			futures[j], err = js.PublishAsync(subj, data)
+			if err != nil {
+				llog.Errorf("unable to JS async publish message: %s", err)
+				worker.NumErrors++
+
+				if worker.NumErrors > numMessages {
+					llog.Error("worker exiting prematurely due to too many errors")
+					break
+				}
+				worker.Errors = append(worker.Errors, err.Error())
+				continue
 			}
-
-			llog.Errorf("unable to publish message: %s", err)
-			worker.NumErrors++
-
-			if worker.NumErrors > numMessages {
-				llog.Error("worker exiting prematurely due to too many errors")
-				break
-			}
-
-			worker.Errors = append(worker.Errors, err.Error())
-			continue
 		}
+		select {
+		case <-js.PublishAsyncComplete():
+			for future := range futures {
+				select {
+				case <-futures[future].Ok():
+					worker.NumWritten++
+				case e := <-futures[future].Err():
+					llog.Error("PubAsyncFuture for message %v in batch not OK: %v", future, e)
+					worker.NumErrors++
 
-		worker.NumWritten++
+					if worker.NumErrors > numMessages {
+						llog.Error("worker exiting prematurely due to too many errors")
+						break
+					}
+
+					worker.Errors = append(worker.Errors, err.Error())
+				}
+			}
+		case <-time.After(5 * time.Second):
+			llog.Error("PublishAsyncComplete timed out after 5s")
+		}
 	}
 
 	worker.ch <- time.Now()

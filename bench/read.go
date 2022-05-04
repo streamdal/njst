@@ -33,38 +33,21 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 	workerMap := make(map[string]map[int]*Worker, 0)
 	var (
-		js       nats.JetStreamContext
 		workerID int
+		nc       *nats.Conn
 	)
 
-	if !job.Settings.NATS.ConnectionPerStream {
-		nc, err := b.nats.NewConn(job.Settings.NATS)
+	if job.Settings.NATS.SharedConnection {
+		var err error
+		nc, err = b.nats.NewConn(job.Settings.NATS)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create nats connection for job "+job.Settings.ID)
+			return nil, errors.Wrap(err, "failed to create single shared nats connection for job "+job.Settings.ID)
 		}
 
 		defer nc.Close()
-
-		js, err = nc.JetStream()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create jetstream context for job %s"+job.Settings.ID)
-		}
 	}
 
 	for _, streamInfo := range job.Settings.Read.Streams {
-		if job.Settings.NATS.ConnectionPerStream {
-			nc, err := b.nats.NewConn(job.Settings.NATS)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create nats connection for stream "+streamInfo.StreamName)
-			}
-
-			defer nc.Close()
-
-			js, err = nc.JetStream()
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create JetStream context. Stream="+streamInfo.StreamName)
-			}
-		}
 
 		for i := 0; i < job.Settings.Read.NumWorkersPerStream; i++ {
 			if workerMap[streamInfo.StreamName] == nil {
@@ -83,7 +66,7 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 			wg.Add(1)
 
-			go b.runReaderWorker(job, js, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
+			go b.runReaderWorker(job, nc, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
 
 			workerID++
 		}
@@ -182,7 +165,9 @@ func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[strin
 	return numRead
 }
 
-func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
+	var myNC = nc
+
 	defer func() {
 		wg.Done()
 	}()
@@ -194,6 +179,26 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 	})
 
 	llog.Debugf("worker starting")
+
+	if !job.Settings.NATS.SharedConnection {
+		var err error
+		myNC, err = b.nats.NewConn(job.Settings.NATS)
+		if err != nil {
+			b.log.Log(logrus.ErrorLevel, "can't get connection for individual worker: ", err)
+			return
+		}
+
+		defer myNC.Drain()
+	} else if nc == nil {
+		b.log.Error("worker not passed a valid shared NATS Connection")
+		return
+	}
+
+	js, err := myNC.JetStream()
+	if err != nil {
+		b.log.Log(logrus.ErrorLevel, "can't get JS context in ReaderWorker")
+		return
+	}
 
 	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.DurableName)
 	if err != nil {
@@ -210,7 +215,7 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 		}
 	}()
 
-	targetNumberOfReads := job.Settings.Read.NumMessagesPerStream / job.Settings.Read.NumWorkersPerStream
+	targetNumberOfReads := job.Settings.Read.NumMessagesPerStream / (job.Settings.Read.NumWorkersPerStream * job.Settings.Read.NumNodes)
 
 	worker.ch <- time.Now()
 
@@ -260,12 +265,12 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 			continue
 		}
 
+		worker.NumRead += len(msgs)
+
 		for _, msg := range msgs {
 			if err := msg.Ack(); err != nil {
 				llog.Warningf("unable to ack message: %s", err)
 			}
-
-			worker.NumRead++
 		}
 	}
 	worker.ch <- time.Now()

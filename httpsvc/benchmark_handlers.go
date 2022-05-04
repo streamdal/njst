@@ -232,5 +232,8 @@ func validateWriteSettings(ws *types.WriteSettings) error {
 		ws.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
 	}
 
+	if ws.BatchSize < 1 {
+		ws.BatchSize = bench.DefaultBatchSize
+	}
 	return nil
 }

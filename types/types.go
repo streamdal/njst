@@ -31,8 +31,8 @@ type Settings struct {
 }
 
 type NATS struct {
-	Address             string `json:"address"`
-	ConnectionPerStream bool   `json:"connection_per_stream"`
+	Address          string `json:"address"`
+	SharedConnection bool   `json:"shared_connection"`
 }
 
 type WriteSettings struct {
@@ -41,6 +41,7 @@ type WriteSettings struct {
 	NumMessagesPerStream int  `json:"num_messages_per_stream"`
 	NumWorkersPerStream  int  `json:"num_workers_per_stream"`
 	NumReplicas          int  `json:"num_replicas"`
+	BatchSize            int  `json:"batch_size"`
 	MsgSizeBytes         int  `json:"msg_size_bytes"`
 	KeepStreams          bool `json:"keep_streams"`
 

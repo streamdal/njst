@@ -292,6 +292,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 			return nil, fmt.Errorf("stream '%s' does not contain enough messages to satisfy read request", stream)
 		}
 		// Can we fit at least 1 batch per worker? <- Is this needed? Is batch best effort?
+		// JNM: the answer is no you don't need it because the batch size passed to the Fetch() call is indeed a 'max number of messages returned back' (i.e. 'best effort')
 	}
 
 	jobs := make([]*types.Job, 0)
@@ -321,6 +322,8 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 				NATS:        settings.NATS,
 				Description: settings.Description,
 				Read: &types.ReadSettings{
+					NumStreams:           settings.Read.NumStreams,
+					NumNodes:             numSelectedNodes,
 					NumMessagesPerStream: settings.Read.NumMessagesPerStream / numSelectedNodes,
 					NumWorkersPerStream:  settings.Read.NumWorkersPerStream,
 					Streams:              streamInfo,
@@ -377,22 +380,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 		numSelectedNodes = settings.Write.NumNodes
 	}
 
-	if settings.Write.NumStreams < numSelectedNodes {
-		numSelectedNodes = settings.Write.NumStreams
-	}
-
-	streamsPerNode := settings.Write.NumStreams / numSelectedNodes
-	streamsPerLastNode := streamsPerNode + (settings.Write.NumStreams % numSelectedNodes)
-
-	var startIndex int
-
 	for i := 0; i < numSelectedNodes; i++ {
-		numStreams := streamsPerNode
-
-		// If this the last node, add remainder streams (if any)
-		if i == numSelectedNodes-1 {
-			numStreams = streamsPerLastNode
-		}
 
 		jobs = append(jobs, &types.Job{
 			NodeID: nodes[i],
@@ -401,27 +389,27 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 				ID:          settings.ID,
 				Description: settings.Description,
 				Write: &types.WriteSettings{
-					NumMessagesPerStream: settings.Write.NumMessagesPerStream,
+					NumStreams:           settings.Write.NumStreams,
+					NumNodes:             settings.Write.NumNodes,
+					NumMessagesPerStream: settings.Write.NumMessagesPerStream / settings.Write.NumNodes,
 					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
 					MsgSizeBytes:         settings.Write.MsgSizeBytes,
 					KeepStreams:          settings.Write.KeepStreams,
-					Subjects:             generateSubjects(startIndex, numStreams, streamPrefix),
+					Subjects:             generateSubjects(settings.Write.NumStreams, streamPrefix),
 				},
 			},
 			CreatedBy: b.params.NodeID,
 			CreatedAt: time.Now().UTC(),
 		})
-
-		startIndex = startIndex + streamsPerNode
 	}
 
 	return jobs, nil
 }
 
-func generateSubjects(startIndex int, numSubjects int, subjectPrefix string) []string {
+func generateSubjects(numSubjects int, subjectPrefix string) []string {
 	subjects := make([]string, 0)
 
-	for i := startIndex; i != numSubjects+startIndex; i++ {
+	for i := 0; i != numSubjects; i++ {
 		subjects = append(subjects, fmt.Sprintf("%s-%d", subjectPrefix, i))
 	}
 
@@ -438,8 +426,22 @@ func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, erro
 
 	if settings.Read != nil {
 		jobs, err = b.createReadJobs(settings)
+		fmt.Printf("%d Read jobs created", len(jobs))
+		for _, j := range jobs {
+			fmt.Printf("Job Node ID: %s\n", j.NodeID)
+
+			println("Read job")
+			fmt.Printf("nodes: %d, streams: %d, messages/stream: %d, workers/stream: %d", j.Settings.Read.NumNodes, j.Settings.Read.NumStreams, j.Settings.Read.NumMessagesPerStream, j.Settings.Read.NumWorkersPerStream)
+		}
 	} else if settings.Write != nil {
 		jobs, err = b.createWriteJobs(settings)
+		fmt.Printf("%d write jobs created", len(jobs))
+		for _, j := range jobs {
+			fmt.Printf("Job Node ID: %s\n", j.NodeID)
+
+			println("Write job")
+			fmt.Printf("nodes: %d, streams: %d, messages/stream: %d, workers/stream: %d", j.Settings.Write.NumNodes, j.Settings.Write.NumStreams, j.Settings.Write.NumMessagesPerStream, j.Settings.Write.NumWorkersPerStream)
+		}
 	} else {
 		return nil, errors.New("settings must have either read or write set")
 	}
