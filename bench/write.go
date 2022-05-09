@@ -37,6 +37,7 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / (job.Settings.Write.NumNodes * job.Settings.Write.NumWorkersPerStream)
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
+
 	var nc *nats.Conn
 
 	if job.Settings.NATS.SharedConnection {
@@ -47,6 +48,7 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 		defer nc.Drain()
 	}
+
 	// Launch workers; last one gets remainder
 	for _, subj := range job.Settings.Write.Subjects {
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
@@ -56,7 +58,6 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 			workerMap[subj][i] = &Worker{
 				WorkerID: i,
-				ch:       make(chan time.Time, 2),
 				Errors:   make([]string, 0),
 			}
 
@@ -76,15 +77,6 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 	// Stop the reporter
 	doneCh <- struct{}{}
-
-	for stream := range workerMap {
-		for worker := range workerMap[stream] {
-			sa := <-workerMap[stream][worker].ch
-			ea := <-workerMap[stream][worker].ch
-			workerMap[stream][worker].StartedAt = sa
-			workerMap[stream][worker].EndedAt = ea
-		}
-	}
 
 	// Calculate the final status
 	return b.calculateStats(job.Settings, job.NodeID, workerMap, types.CompletedStatus, "; final"), nil
@@ -136,7 +128,9 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 	})
 
 	llog.Debug("worker starting")
-	worker.ch <- time.Now()
+
+	// Record started at time
+	worker.StartedAt = time.Now().UTC()
 
 	for i := 0; i < numMessages; i += batchSize {
 		futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
@@ -145,12 +139,13 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 			if err != nil {
 				llog.Errorf("unable to JS async publish message: %s", err)
 				worker.NumErrors++
+				worker.Errors = append(worker.Errors, err.Error())
 
 				if worker.NumErrors > numMessages {
 					llog.Error("worker exiting prematurely due to too many errors")
 					break
 				}
-				worker.Errors = append(worker.Errors, err.Error())
+
 				continue
 			}
 		}
@@ -161,15 +156,15 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 				case <-futures[future].Ok():
 					worker.NumWritten++
 				case e := <-futures[future].Err():
-					llog.Error("PubAsyncFuture for message %v in batch not OK: %v", future, e)
+					llog.Errorf("PubAsyncFuture for message %v in batch not OK: %v", future, e)
+
 					worker.NumErrors++
+					worker.Errors = append(worker.Errors, e.Error())
 
 					if worker.NumErrors > numMessages {
 						llog.Error("worker exiting prematurely due to too many errors")
 						break
 					}
-
-					worker.Errors = append(worker.Errors, err.Error())
 				}
 			}
 		case <-time.After(5 * time.Second):
@@ -177,7 +172,9 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 		}
 	}
 
-	worker.ch <- time.Now()
+	// Record ended at
+	worker.EndedAt = time.Now().UTC()
+
 	llog.Debugf("worker exiting; wrote '%d' messages", worker.NumWritten)
 
 }
@@ -203,11 +200,22 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 	var streamReports []types.StreamReport
 	for i, stream := range workerMap {
 		workerReports := make([]types.WorkerReport, len(workerMap[i]))
-		var workerTotalElapsed time.Duration = 0 * time.Second
+		workerTotalElapsed := 0 * time.Second
+
 		for j, worker := range stream {
-			report := types.WorkerReport{WorkerID: fmt.Sprintf("%s-%s-%d", nodeId, i, worker.WorkerID)}
-			workerElapsed := worker.EndedAt.Sub(worker.StartedAt)
-			report.ElapsedSeconds = workerElapsed.Seconds()
+			report := types.WorkerReport{
+				WorkerID: fmt.Sprintf("%s-%s-%d", nodeId, i, worker.WorkerID),
+			}
+
+			var workerElapsed time.Duration
+
+			if worker.EndedAt.IsZero() {
+				workerElapsed = time.Now().UTC().Sub(worker.StartedAt)
+			} else {
+				workerElapsed = worker.EndedAt.Sub(worker.StartedAt)
+			}
+
+			report.ElapsedSeconds = round(workerElapsed.Seconds(), 2)
 			workerTotalElapsed += workerElapsed
 
 			workerNumProcessed := func() int {
@@ -222,7 +230,8 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 
 			report.Processed = workerNumProcessed
 			numProcessedTotal += workerNumProcessed
-			report.AvgMsgPerSec = float64(workerNumProcessed) / workerElapsed.Seconds()
+			report.AvgMsgPerSec = round(float64(workerNumProcessed)/workerElapsed.Seconds(), 2)
+
 			totalPerWorkGroupAverages += report.AvgMsgPerSec
 
 			report.Errors = worker.NumErrors

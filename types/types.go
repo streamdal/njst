@@ -80,7 +80,7 @@ type WorkerReport struct {
 	Processed      int     `json:"processed"`
 	Errors         int     `json:"errors"`
 	ElapsedSeconds float64 `json:"elapsed_seconds,omitempty"`
-	AvgMsgPerSec   float64 `json:"avg_msg_per_sec,omitempty"`
+	AvgMsgPerSec   float64 `json:"avg_msg_per_sec,omitempty"` // Inf+ problem
 }
 
 type StreamReport struct {
@@ -98,7 +98,7 @@ type Status struct {
 	JobID                  string       `json:"job_id"`
 	NodeID                 string       `json:"node_id,omitempty"`
 	ElapsedSeconds         float64      `json:"elapsed_seconds,omitempty"`
-	AvgMsgPerSecPerNode    float64      `json:"avg_msg_per_sec_per_node,omitempty"`
+	AvgMsgPerSecPerNode    float64      `json:"avg_msg_per_sec_per_node,omitempty"` // Inf+ problem
 	TotalMsgPerSecAllNodes float64      `json:"total_msg_per_sec_all_nodes,omitempty"`
 	AvgMsgPerSecAllNodes   float64      `json:"avg_msg_per_sec_all_nodes,omitempty"`
 	TotalProcessed         int          `json:"total_processed"`

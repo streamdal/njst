@@ -148,7 +148,7 @@ func (n *NATSService) WriteStatus(status *types.Status) error {
 
 	data, err := json.Marshal(status)
 	if err != nil {
-		return errors.Wrapf(err, "unable to marshal status for job '%s'", status.JobID)
+		return errors.Wrapf(err, "> unable to marshal status for job '%s'", status.JobID)
 	}
 
 	if _, err := bucket.Put(status.NodeID, data); err != nil {

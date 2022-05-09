@@ -58,7 +58,6 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
 				WorkerID: workerID,
-				ch:       make(chan time.Time, 2),
 				Errors:   make([]string, 0),
 				ctx:      ctx,    // Worker specific context; read from by worker
 				cancel:   cancel, // Worker specific cancel; used by monitor to signal worker to stop
@@ -83,15 +82,6 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 	// Stop reporter & monitor
 	close(doneCh)
-
-	for stream := range workerMap {
-		for worker := range workerMap[stream] {
-			sa := <-workerMap[stream][worker].ch
-			ea := <-workerMap[stream][worker].ch
-			workerMap[stream][worker].StartedAt = sa
-			workerMap[stream][worker].EndedAt = ea
-		}
-	}
 
 	// Hack: It's possible other nodes are lagging behind this node - wait a little bit
 	// before we write final status
@@ -217,7 +207,7 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 
 	targetNumberOfReads := job.Settings.Read.NumMessagesPerStream / (job.Settings.Read.NumWorkersPerStream * job.Settings.Read.NumNodes)
 
-	worker.ch <- time.Now()
+	worker.StartedAt = time.Now().UTC()
 
 	for worker.NumRead < targetNumberOfReads {
 		llog.Debugf("worker has read %d messages out of %d", worker.NumRead, targetNumberOfReads)
@@ -273,7 +263,8 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 			}
 		}
 	}
-	worker.ch <- time.Now()
+
+	worker.EndedAt = time.Now().UTC()
 
 	llog.Debugf("worker exiting; '%d' read, '%d' errors", worker.NumRead, worker.NumErrors)
 }

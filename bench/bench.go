@@ -41,9 +41,9 @@ type Worker struct {
 	Errors     []string
 	StartedAt  time.Time
 	EndedAt    time.Time
-	ch         chan time.Time
-	ctx        context.Context
-	cancel     context.CancelFunc
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
@@ -101,7 +101,7 @@ func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResult
 }
 
 func (b *Bench) runReporter(doneCh chan struct{}, job *types.Job, workerMap map[string]map[int]*Worker) {
-	//ticker := time.NewTicker(ReporterFrequency)
+	ticker := time.NewTicker(ReporterFrequency)
 	llog := b.log.WithFields(logrus.Fields{
 		"job": job.Settings.ID,
 	})
@@ -115,12 +115,14 @@ MAIN:
 		case <-doneCh:
 			llog.Debug("job completed")
 			break MAIN
-			//case <-ticker.C:
-			//	aggregateStats := b.calculateStats(job.Settings, workerMap, types.InProgressStatus, "; ticker")
-			//
-			//	if err := b.nats.WriteStatus(aggregateStats); err != nil {
-			//		b.log.Error("unable to write status", "error", err)
-			//	}
+		case <-ticker.C:
+			aggregateStats := b.calculateStats(job.Settings, job.NodeID, workerMap, types.InProgressStatus, "; ticker")
+
+			if err := b.nats.WriteStatus(aggregateStats); err != nil {
+				b.log.Error("> unable to write status", err)
+				b.log.Debugf("AGGREGATE: %+v", aggregateStats)
+
+			}
 		}
 	}
 
@@ -192,8 +194,13 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 		}
 	}
 
-	// Make stats more readable
-	finalStatus.ElapsedSeconds = round(finalStatus.EndedAt.Sub(finalStatus.StartedAt).Seconds(), 2)
+	// Make stats more readable -- lower decimal point, deal with unfinished job
+	if finalStatus.EndedAt.IsZero() {
+		finalStatus.ElapsedSeconds = round(time.Now().UTC().Sub(finalStatus.StartedAt).Seconds(), 2)
+	} else {
+		finalStatus.ElapsedSeconds = round(finalStatus.EndedAt.Sub(finalStatus.StartedAt).Seconds(), 2)
+	}
+
 	finalStatus.TotalMsgPerSecAllNodes = round(totalPerNodeAverages, 2)
 	finalStatus.AvgMsgPerSecPerNode = round(totalPerNodeAverages/float64(totalNumberOfNodesReporting), 2)
 
@@ -211,7 +218,8 @@ func (b *Bench) createProducer(settings *types.Settings) (string, error) {
 }
 
 // in order to be able to run a read bench multiple times in a row the durable consumer must be deleted between runs
-// it's much easier to just delete the consumers (if they exist, they would not the first time the read bench is run, hence ignoring the error) right before re-creating them
+// it's much easier to just delete the consumers (if they exist, they would not the first time the read bench is run,
+// hence ignoring the error) right before re-creating them
 func (b *Bench) deleteDurableConsumers(streams []string) {
 	for _, stream := range streams {
 		b.nats.DeleteDurableConsumer(stream)
@@ -386,6 +394,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	} else {
 		numSelectedNodes = settings.Write.NumNodes
 	}
+
 	settings.Write.NumNodes = numSelectedNodes
 
 	for i := 0; i < numSelectedNodes; i++ {
@@ -436,12 +445,11 @@ func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, erro
 		jobs, err = b.createReadJobs(settings)
 	} else if settings.Write != nil {
 		jobs, err = b.createWriteJobs(settings)
-		fmt.Printf("%d write jobs created", len(jobs))
-		for _, j := range jobs {
-			fmt.Printf("Job Node ID: %s\n", j.NodeID)
+		b.log.Debugf("%d write jobs created", len(jobs))
 
-			println("Write job")
-			fmt.Printf("nodes: %d, streams: %d, messages/stream: %d, workers/stream: %d", j.Settings.Write.NumNodes, j.Settings.Write.NumStreams, j.Settings.Write.NumMessagesPerStream, j.Settings.Write.NumWorkersPerStream)
+		for i, j := range jobs {
+			b.log.Debugf("job #%d, nodes: %d, streams: %d, messages/stream: %d, workers/stream: %d",
+				i, j.Settings.Write.NumNodes, j.Settings.Write.NumStreams, j.Settings.Write.NumMessagesPerStream, j.Settings.Write.NumWorkersPerStream)
 		}
 	} else {
 		return nil, errors.New("settings must have either read or write set")
