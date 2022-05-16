@@ -1,7 +1,6 @@
 package bench
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -41,9 +40,6 @@ type Worker struct {
 	Errors     []string
 	StartedAt  time.Time
 	EndedAt    time.Time
-
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
@@ -75,6 +71,8 @@ func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResult
 	if err := b.nats.EmitJobs(types.DeleteJob, deleteJobs); err != nil {
 		return errors.Wrap(err, "unable to emit delete jobs")
 	}
+
+	// TODO: Wait for 3s to see if any errors are reported
 
 	// Delete settings
 	if deleteSettings {
@@ -278,7 +276,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	}
 
 	if settings.Read.NumNodes > len(nodes) {
-		return nil, errors.Errorf("%d nodes requested but only %d available", settings.Read.NumNodes, len(nodes))
+		return nil, errors.Errorf("%d nodes requested but %d available", settings.Read.NumNodes, len(nodes))
 	}
 
 	if settings.Read.WriteID == "" {
@@ -289,7 +287,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	streams := b.nats.GetStreams("njst-" + settings.Read.WriteID + "-")
 
 	if len(streams) < settings.Read.NumStreams {
-		return nil, errors.Errorf("%d streams requested but only %d available", settings.Read.NumStreams, len(streams))
+		return nil, errors.Errorf("%d streams requested but %d available", settings.Read.NumStreams, len(streams))
 	}
 
 	if len(streams) > settings.Read.NumStreams {
@@ -364,7 +362,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	}
 
 	if settings.Write.NumNodes > len(nodes) {
-		return nil, errors.Errorf("unable to create write jobs: %d nodes requested but only %d available", settings.Write.NumNodes, len(nodes))
+		return nil, errors.Errorf("unable to create write jobs: %d nodes requested but %d available", settings.Write.NumNodes, len(nodes))
 	}
 
 	streamPrefix := fmt.Sprintf("njst-%s", settings.ID)

@@ -9,6 +9,7 @@ const (
 	InProgressStatus JobStatus = "in-progress"
 	ErrorStatus      JobStatus = "error"
 	CompletedStatus  JobStatus = "completed"
+	CancelledStatus  JobStatus = "cancelled"
 
 	CreateJob JobType = "create"
 	DeleteJob JobType = "delete"

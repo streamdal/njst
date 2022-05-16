@@ -1,7 +1,6 @@
 package bench
 
 import (
-	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -65,9 +64,9 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 			// Last worker gets remaining messages
 			if i == job.Settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(job.Context, nc, job, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(nc, job, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
 			} else {
-				go b.runWriterWorker(job.Context, nc, job, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(nc, job, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
 			}
 		}
 	}
@@ -78,8 +77,20 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	// Stop the reporter
 	doneCh <- struct{}{}
 
+	var status types.JobStatus
+
+	// Was this job cancelled? (in select to avoid blocking if not cancelled)
+	select {
+	case _, ok := <-job.Context.Done():
+		if !ok {
+			status = types.CancelledStatus
+		}
+	default:
+		status = types.CompletedStatus
+	}
+
 	// Calculate the final status
-	return b.calculateStats(job.Settings, job.NodeID, workerMap, types.CompletedStatus, "; final"), nil
+	return b.calculateStats(job.Settings, job.NodeID, workerMap, status, "; final"), nil
 }
 
 func min(a, b int) int {
@@ -89,11 +100,12 @@ func min(a, b int) int {
 	return b
 }
 
-func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.Job, workerID int, subj string, data []byte, numMessages int, worker *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, subj string, data []byte, numMessages int, worker *Worker, wg *sync.WaitGroup) {
 	var batchSize = job.Settings.Write.BatchSize
+
 	if batchSize == 0 {
 		batchSize = 100
-	} // TODO find out why the batch size doesn't set to default in WriteSettings like it does in ReadSettings
+	}
 
 	var myNC = nc
 	var err error
@@ -115,7 +127,7 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 
 	//js, err := nc.JetStream(nats.PublishAsyncMaxPending(batchSize))
 	// No need to rely on the context Max pub async setting for flow control as now checking the puback futures in batches
-	js, err := myNC.JetStream()
+	js, err := myNC.JetStream(nats.Context(job.Context))
 	if err != nil {
 		b.log.Log(logrus.ErrorLevel, "can't get JS context in WriteWorker")
 		return
@@ -132,6 +144,7 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 	// Record started at time
 	worker.StartedAt = time.Now().UTC()
 
+MAIN:
 	for i := 0; i < numMessages; i += batchSize {
 		futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
 		for j := 0; j < batchSize && i+j < numMessages; j++ {
@@ -143,13 +156,16 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 
 				if worker.NumErrors > numMessages {
 					llog.Error("worker exiting prematurely due to too many errors")
-					break
+					break MAIN
 				}
 
 				continue
 			}
 		}
 		select {
+		case <-job.Context.Done():
+			llog.Debug("worker exiting due to context done")
+			return
 		case <-js.PublishAsyncComplete():
 			for future := range futures {
 				select {
@@ -163,12 +179,20 @@ func (b *Bench) runWriterWorker(ctx context.Context, nc *nats.Conn, job *types.J
 
 					if worker.NumErrors > numMessages {
 						llog.Error("worker exiting prematurely due to too many errors")
-						break
+						break MAIN
 					}
 				}
 			}
 		case <-time.After(5 * time.Second):
 			llog.Error("PublishAsyncComplete timed out after 5s")
+
+			worker.NumErrors++
+			worker.Errors = append(worker.Errors, errors.New("PublishAsyncComplete timed out after 5s").Error())
+
+			if worker.NumErrors > numMessages {
+				llog.Error("worker exiting prematurely due to too many errors")
+				break MAIN
+			}
 		}
 	}
 
@@ -193,8 +217,13 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 
 	message := "benchmark is in progress"
 
-	if jobStatus == types.CompletedStatus {
+	switch jobStatus {
+	case types.CompletedStatus:
 		message = "benchmark completed"
+	case types.CancelledStatus:
+		message = "benchmark cancelled"
+	case types.InProgressStatus:
+		message = "benchmark is in progress"
 	}
 
 	var streamReports []types.StreamReport

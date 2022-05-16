@@ -1,7 +1,6 @@
 package bench
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 )
 
 const (
-	MonitorFrequency   = 100 * time.Millisecond
 	MaxErrorsPerWorker = 100
 )
 
@@ -48,19 +46,14 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	}
 
 	for _, streamInfo := range job.Settings.Read.Streams {
-
 		for i := 0; i < job.Settings.Read.NumWorkersPerStream; i++ {
 			if workerMap[streamInfo.StreamName] == nil {
 				workerMap[streamInfo.StreamName] = make(map[int]*Worker, 0)
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
-
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
 				WorkerID: workerID,
 				Errors:   make([]string, 0),
-				ctx:      ctx,    // Worker specific context; read from by worker
-				cancel:   cancel, // Worker specific cancel; used by monitor to signal worker to stop
 			}
 
 			wg.Add(1)
@@ -74,73 +67,26 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	// Launch periodic workerMap aggregation & reporting
 	go b.runReporter(doneCh, job, workerMap)
 
-	// Monitor overall work and inform workers when to stop
-	go b.runReaderMonitor(doneCh, job, workerMap)
-
 	// Wait for all workers to finish
 	wg.Wait()
 
 	// Stop reporter & monitor
 	close(doneCh)
 
-	// Hack: It's possible other nodes are lagging behind this node - wait a little bit
-	// before we write final status
-	//time.Sleep(1 * time.Second)
+	var status types.JobStatus
 
-	// Calculate the final status
-	return b.calculateStats(job.Settings, job.NodeID, workerMap, types.CompletedStatus, "; final"), nil
-}
-
-func (b *Bench) runReaderMonitor(doneCh chan struct{}, job *types.Job, workerMap map[string]map[int]*Worker) {
-	llog := b.log.WithFields(logrus.Fields{
-		"method": "runReaderMonitor",
-		"job":    job.Settings.ID,
-	})
-
-	ticker := time.NewTicker(MonitorFrequency)
-
-	finishedStreams := map[string]bool{}
-
-MAIN:
-	for {
-		select {
-		case <-ticker.C:
-			for stream, numRead := range b.calculateNumRead(workerMap) {
-				// Nothing to cancel for an already finished stream
-				if _, ok := finishedStreams[stream]; ok {
-					continue
-				}
-
-				if numRead >= job.Settings.Read.NumMessagesPerStream {
-					// Tell workgroup to stop
-					for _, worker := range workerMap[stream] {
-						llog.Debugf("signalling worker '%d' for stream '%s' to stop", worker.WorkerID, stream)
-						go worker.cancel()
-					}
-
-					finishedStreams[stream] = true
-				}
-			}
-		case <-doneCh:
-			// Job has been completed
-			llog.Debug("job completed")
-			break MAIN
-		case <-job.Context.Done():
-			// Job has been deleted - tell all workers to exit
-			llog.Debug("job asked to abort")
-
-			for _, stream := range workerMap {
-				for _, worker := range stream {
-					llog.Debugf("signalling worker '%d' to stop", worker.WorkerID)
-					go worker.cancel()
-				}
-			}
-
-			break MAIN
+	// Was this job cancelled? (in select to avoid blocking if not cancelled)
+	select {
+	case _, ok := <-job.Context.Done():
+		if !ok {
+			status = types.CancelledStatus
 		}
+	default:
+		status = types.CompletedStatus
 	}
 
-	llog.Debug("exiting")
+	// Calculate the final status
+	return b.calculateStats(job.Settings, job.NodeID, workerMap, status, "; final"), nil
 }
 
 func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[string]int {
@@ -184,7 +130,7 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 		return
 	}
 
-	js, err := myNC.JetStream()
+	js, err := myNC.JetStream(nats.Context(job.Context))
 	if err != nil {
 		b.log.Log(logrus.ErrorLevel, "can't get JS context in ReaderWorker")
 		return
@@ -220,7 +166,7 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 			}
 		}()
 
-		msgs, err := sub.Fetch(batchSize)
+		msgs, err := sub.Fetch(batchSize, nats.Context(job.Context))
 		if err != nil {
 			if strings.Contains(err.Error(), "context canceled") {
 				llog.Debug("worker asked to exit")
@@ -258,7 +204,13 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 		worker.NumRead += len(msgs)
 
 		for _, msg := range msgs {
-			if err := msg.Ack(); err != nil {
+			if err := msg.Ack(nats.Context(job.Context)); err != nil {
+				if strings.Contains(err.Error(), "context canceled") {
+					llog.Debug("worker asked to exit")
+
+					break
+				}
+
 				llog.Warningf("unable to ack message: %s", err)
 			}
 		}
