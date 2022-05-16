@@ -93,21 +93,21 @@ type NodeReport struct {
 }
 
 type Status struct {
-	Status                 JobStatus    `json:"status"`
-	Message                string       `json:"message"`
-	Errors                 []string     `json:"errors,omitempty"`
-	JobID                  string       `json:"job_id"`
-	NodeID                 string       `json:"node_id,omitempty"`
-	ElapsedSeconds         float64      `json:"elapsed_seconds,omitempty"`
-	AvgMsgPerSecPerNode    float64      `json:"avg_msg_per_sec_per_node,omitempty"` // Inf+ problem
-	TotalMsgPerSecAllNodes float64      `json:"total_msg_per_sec_all_nodes,omitempty"`
-	AvgMsgPerSecAllNodes   float64      `json:"avg_msg_per_sec_all_nodes,omitempty"`
-	TotalProcessed         int          `json:"total_processed"`
-	TotalErrors            int          `json:"total_errors"`
-	StartedAt              time.Time    `json:"started_at"`
-	EndedAt                time.Time    `json:"ended_at,omitempty"` // omitempty because it's not set for in-progress jobs
-	NodeReport             NodeReport   `json:"node_report,omitempty"`
-	NodeReports            []NodeReport `json:"node_reports,omitempty"`
+	Status                 JobStatus     `json:"status"`
+	Message                string        `json:"message"`
+	Errors                 []string      `json:"errors,omitempty"`
+	JobID                  string        `json:"job_id"`
+	NodeID                 string        `json:"node_id,omitempty"`
+	ElapsedSeconds         float64       `json:"elapsed_seconds,omitempty"`
+	AvgMsgPerSecPerNode    float64       `json:"avg_msg_per_sec_per_node,omitempty"` // Inf+ problem
+	TotalMsgPerSecAllNodes float64       `json:"total_msg_per_sec_all_nodes,omitempty"`
+	AvgMsgPerSecAllNodes   float64       `json:"avg_msg_per_sec_all_nodes,omitempty"`
+	TotalProcessed         int           `json:"total_processed"`
+	TotalErrors            int           `json:"total_errors"`
+	StartedAt              time.Time     `json:"started_at"`
+	EndedAt                time.Time     `json:"ended_at,omitempty"`     // omitempty because it's not set for in-progress jobs
+	NodeReport             *NodeReport   `json:"node_report,omitempty"`  // used per node
+	NodeReports            []*NodeReport `json:"node_reports,omitempty"` // used for aggregate display for status
 }
 
 type JobType string

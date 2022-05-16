@@ -204,13 +204,8 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 		worker.NumRead += len(msgs)
 
 		for _, msg := range msgs {
-			if err := msg.Ack(nats.Context(job.Context)); err != nil {
-				if strings.Contains(err.Error(), "context canceled") {
-					llog.Debug("worker asked to exit")
-
-					break
-				}
-
+			// Do not pass ctx to Ack - it will cause the ack to be sync (and slow)
+			if err := msg.Ack(); err != nil {
 				llog.Warningf("unable to ack message: %s", err)
 			}
 		}

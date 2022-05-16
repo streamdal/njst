@@ -305,7 +305,7 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 		TotalErrors:         numErrorsTotal,
 		StartedAt:           minStartedAt,
 		EndedAt:             maxEndedAt,
-		NodeReport: types.NodeReport{
+		NodeReport: &types.NodeReport{
 			Streams: streamReports,
 		},
 	}

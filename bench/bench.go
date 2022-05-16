@@ -144,7 +144,7 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 
 	var totalPerNodeAverages = float64(0)
 	var totalNumberOfNodesReporting = 0
-	nodeReports := make([]types.NodeReport, len(keys))
+	nodeReports := make([]*types.NodeReport, len(keys))
 
 	for i, key := range keys {
 		b.log.Debugf("looking up results in bucket '%s', object '%s'", fullBucketName, key)
@@ -187,7 +187,7 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 			finalStatus.EndedAt = s.EndedAt
 		}
 
-		nodeReports[i] = types.NodeReport{
+		nodeReports[i] = &types.NodeReport{
 			Streams: s.NodeReport.Streams,
 		}
 	}
