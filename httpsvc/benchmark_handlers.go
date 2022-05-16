@@ -33,6 +33,11 @@ func (h *HTTPService) getBenchmarkHandler(rw http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Clear node reports unless "full" is specified
+	if _, ok := r.URL.Query()["full"]; !ok {
+		status.NodeReports = nil
+	}
+
 	settings, err := h.nats.GetSettings(id)
 	if err != nil {
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get settings: %s", err), rw)
