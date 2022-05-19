@@ -229,19 +229,9 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 		message = "benchmark is in progress"
 	}
 
-	var numWorkers int
-
-	if settings.Read != nil {
-		numWorkers = settings.Read.NumWorkersPerStream
-	} else if settings.Write != nil {
-		numWorkers = settings.Write.NumWorkersPerStream
-	} else {
-		panic("can't determine number of workers")
-	}
-
 	var streamReports []types.StreamReport
 	for i, stream := range workerMap {
-		workerReports := make([]types.WorkerReport, numWorkers)
+		workerReports := make([]types.WorkerReport, 0)
 		workerTotalElapsed := 0 * time.Second
 
 		for j, worker := range stream {
@@ -293,8 +283,10 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 			if worker.EndedAt.After(maxEndedAt) {
 				maxEndedAt = worker.EndedAt
 			}
-			workerReports[j] = report
+
+			workerReports = append(workerReports, report)
 		}
+
 		totalElapsed += workerTotalElapsed
 		streamReports = append(streamReports, types.StreamReport{Workers: workerReports})
 	}
