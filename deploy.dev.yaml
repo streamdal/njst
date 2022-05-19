@@ -29,7 +29,7 @@ spec:
             - name: NJST_DEBUG
               value: "true"
             - name: NJST_NATS_ADDRESS
-              value: "172.16.0.47:4222"
+              value: "172.16.0.47"
             - name: NJST_HTTP_ADDRESS
               value: ":5000"
           resources:
