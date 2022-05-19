@@ -234,7 +234,7 @@ func (b *Bench) calculateStats(settings *types.Settings, nodeId string, workerMa
 		workerReports := make([]types.WorkerReport, 0)
 		workerTotalElapsed := 0 * time.Second
 
-		for j, worker := range stream {
+		for _, worker := range stream {
 			report := types.WorkerReport{
 				WorkerID: fmt.Sprintf("%s-%s-%d", nodeId, i, worker.WorkerID),
 			}
