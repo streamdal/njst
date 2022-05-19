@@ -147,6 +147,7 @@ func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, sub
 MAIN:
 	for i := 0; i < numMessages; i += batchSize {
 		futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
+
 		for j := 0; j < batchSize && i+j < numMessages; j++ {
 			futures[j], err = js.PublishAsync(subj, data)
 			if err != nil {
@@ -162,6 +163,7 @@ MAIN:
 				continue
 			}
 		}
+
 		select {
 		case <-job.Context.Done():
 			llog.Debug("worker exiting due to context done")
@@ -183,11 +185,12 @@ MAIN:
 					}
 				}
 			}
-		case <-time.After(5 * time.Second):
-			llog.Error("PublishAsyncComplete timed out after 5s")
+		case <-time.After(10 * time.Second):
+			llog.Error("PublishAsyncComplete timed out after 10s")
 
 			worker.NumErrors++
-			worker.Errors = append(worker.Errors, errors.New("PublishAsyncComplete timed out after 5s").Error())
+			worker.Errors = append(worker.Errors, fmt.Sprintf(
+				"PublishAsyncComplete timed out after 10s (pending: %d)", js.PublishAsyncPending()))
 
 			if worker.NumErrors > numMessages {
 				llog.Error("worker exiting prematurely due to too many errors")

@@ -124,6 +124,7 @@ func main() {
 	logrus.Infof("NodeID:                       %s", params.NodeID)
 	logrus.Infof("HTTP server listening on:     %s", params.HTTPAddress)
 	logrus.Infof("Nodes in cluster:             %d", len(nodes))
+	logrus.Infof("Version:                      %s", VERSION)
 	logrus.Info("")
 	logrus.Info("njst is ready. Refer to 'docs/api.md' for API usage.")
 
