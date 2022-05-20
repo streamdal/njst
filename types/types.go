@@ -13,10 +13,6 @@ const (
 
 	CreateJob JobType = "create"
 	DeleteJob JobType = "delete"
-
-	PerStreamReadStrategy  = "workers-per-stream"
-	PerNodeReadStrategy    = "workers-per-node"
-	PerSubjectReadStrategy = "workers-per-subject"
 )
 
 type JobStatus string
@@ -37,18 +33,26 @@ type NATS struct {
 }
 
 type WriteSettings struct {
-	NumStreams           int  `json:"num_streams"`
-	NumNodes             int  `json:"num_nodes"`
-	NumMessagesPerStream int  `json:"num_messages_per_stream"`
-	NumWorkersPerStream  int  `json:"num_workers_per_stream"`
-	NumReplicas          int  `json:"num_replicas"`
-	BatchSize            int  `json:"batch_size"`
-	MsgSizeBytes         int  `json:"msg_size_bytes"`
-	KeepStreams          bool `json:"keep_streams"`
+	NumStreams           int         `json:"num_streams"`
+	NumNodes             int         `json:"num_nodes"`
+	NumMessagesPerStream int         `json:"num_messages_per_stream"`
+	NumWorkersPerStream  int         `json:"num_workers_per_stream"`
+	NumReplicas          int         `json:"num_replicas"`
+	BatchSize            int         `json:"batch_size"`
+	MsgSizeBytes         int         `json:"msg_size_bytes"`
+	KeepStreams          bool        `json:"keep_streams"`
+	Storage              StorageType `json:"storage"`
 
 	// Filled out by bench.GenerateCreateJobs
 	Subjects []string `json:"subjects,omitempty"`
 }
+
+const (
+	MemoryStreamType StorageType = "memory"
+	FileStorageType  StorageType = "disk"
+)
+
+type StorageType string
 
 type ReadSettings struct {
 	// WriteID should reference a completed write job
@@ -108,6 +112,10 @@ type Status struct {
 	EndedAt                time.Time     `json:"ended_at,omitempty"`     // omitempty because it's not set for in-progress jobs
 	NodeReport             *NodeReport   `json:"node_report,omitempty"`  // used per node
 	NodeReports            []*NodeReport `json:"node_reports,omitempty"` // used for aggregate display for status
+}
+
+type PurgeRequest struct {
+	All bool `json:"all"`
 }
 
 type JobType string

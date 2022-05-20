@@ -60,6 +60,63 @@ func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
 	}, nil
 }
 
+func (b *Bench) Purge(req *types.PurgeRequest) error {
+	if req == nil {
+		return errors.New("purge request cannot be nil")
+	}
+
+	if !req.All {
+		return errors.New("'all' is false - won't purge")
+	}
+
+	// Get all jobs
+	settings, err := b.nats.GetAllSettings()
+	if err != nil {
+		return errors.Wrap(err, "unable to fetch existing settings")
+	}
+
+	if len(settings) == 0 {
+		b.log.Debugf("no settings found, not emitting jobs")
+	} else {
+		// Create delete jobs for each node
+		jobs, err := b.GenerateDeleteAllJobs()
+		if err != nil {
+			return errors.Wrap(err, "unable to generate delete jobs for purge")
+		}
+
+		// Emit delete jobs
+		if err := b.nats.EmitJobs(types.DeleteJob, jobs); err != nil {
+			return errors.Wrap(err, "unable to emit delete jobs for purge")
+		}
+	}
+
+	var errorCount int
+
+	for _, cfg := range settings {
+		// Delete settings
+		if err := b.nats.DeleteSettings(cfg.ID); err != nil {
+			b.log.Warningf("unable to delete settings for job '%s': %s", cfg.ID, err)
+			errorCount++
+		}
+
+		// Delete results
+		if err := b.nats.DeleteResults(cfg.ID); err != nil {
+			b.log.Warningf("unable to delete results for job '%s': %s", cfg.ID, err)
+			errorCount++
+		}
+
+		// Delete streams
+		if err := b.nats.DeleteStreams(cfg.ID); err != nil {
+			b.log.Warningf("unable to delete streams for job '%s': %s", cfg.ID, err)
+			errorCount++
+		}
+	}
+
+	b.log.Debugf("purge completed %d jobs, %d errors", len(settings), errorCount)
+
+	return nil
+}
+
 func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResults bool) error {
 	// Create delete jobs
 	deleteJobs, err := b.GenerateDeleteJobs(jobID)
@@ -367,6 +424,12 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 
 	streamPrefix := fmt.Sprintf("njst-%s", settings.ID)
 
+	storageType := nats.MemoryStorage
+
+	if settings.Write.Storage == types.FileStorageType {
+		storageType = nats.FileStorage
+	}
+
 	// Create streams
 	for i := 0; i < settings.Write.NumStreams; i++ {
 		streamName := fmt.Sprintf("%s-%d", streamPrefix, i)
@@ -375,7 +438,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 			Name:        streamName,
 			Description: "njst bench stream",
 			Subjects:    []string{streamName},
-			Storage:     nats.MemoryStorage,
+			Storage:     storageType,
 			Replicas:    settings.Write.NumReplicas,
 		}); err != nil {
 			return nil, errors.Wrapf(err, "unable to create stream '%s'", streamName)
@@ -455,6 +518,36 @@ func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, erro
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create jobs")
+	}
+
+	return jobs, nil
+}
+
+func (b *Bench) GenerateDeleteAllJobs() ([]*types.Job, error) {
+	nodes, err := b.nats.GetNodeList()
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to get node list")
+	}
+
+	jobs := make([]*types.Job, 0)
+
+	// Get all settings
+	settings, err := b.nats.GetAllSettings()
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to fetch settings")
+	}
+
+	for _, node := range nodes {
+		for _, cfg := range settings {
+			jobs = append(jobs, &types.Job{
+				NodeID: node,
+				Settings: &types.Settings{
+					ID: cfg.ID,
+				},
+				CreatedBy: "njst purge",
+				CreatedAt: time.Now().UTC(),
+			})
+		}
 	}
 
 	return jobs, nil
