@@ -279,5 +279,9 @@ func validateWriteSettings(ws *types.WriteSettings) error {
 		return errors.New("unrecognized storage type")
 	}
 
+	if ws.NumSubjectsPerStream == 0 {
+		ws.NumSubjectsPerStream = bench.DefaultNumSubjects
+	}
+
 	return nil
 }

@@ -22,6 +22,7 @@ const (
 	DefaultMsgSizeBytes         = 1024
 	DefaultNumMessagesPerStream = 10000
 	DefaultNumWorkersPerStream  = 1
+	DefaultNumSubjects          = 1
 )
 
 type Bench struct {
@@ -433,11 +434,16 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	// Create streams
 	for i := 0; i < settings.Write.NumStreams; i++ {
 		streamName := fmt.Sprintf("%s-%d", streamPrefix, i)
+		streamSubjects := make([]string, 0)
+
+		for s := 0; s < settings.Write.NumSubjectsPerStream; s++ {
+			streamSubjects = append(streamSubjects, fmt.Sprintf("%s.%d", streamName, s))
+		}
 
 		if _, err := b.nats.AddStream(&nats.StreamConfig{
 			Name:        streamName,
 			Description: "njst bench stream",
-			Subjects:    []string{streamName},
+			Subjects:    streamSubjects,
 			Storage:     storageType,
 			Replicas:    settings.Write.NumReplicas,
 		}); err != nil {
@@ -473,7 +479,8 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
 					MsgSizeBytes:         settings.Write.MsgSizeBytes,
 					KeepStreams:          settings.Write.KeepStreams,
-					Subjects:             generateStreams(settings.Write.NumStreams, streamPrefix),
+					NumSubjectsPerStream: settings.Write.NumSubjectsPerStream,
+					Streams:              generateStreams(settings.Write.NumStreams, streamPrefix),
 				},
 			},
 			CreatedBy: b.params.NodeID,
