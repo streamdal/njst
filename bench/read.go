@@ -1,7 +1,6 @@
 package bench
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,7 +13,6 @@ import (
 )
 
 const (
-	MonitorFrequency   = 100 * time.Millisecond
 	MaxErrorsPerWorker = 100
 )
 
@@ -33,57 +31,34 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 
 	workerMap := make(map[string]map[int]*Worker, 0)
 	var (
-		js       nats.JetStreamContext
 		workerID int
+		nc       *nats.Conn
 	)
 
-	if !job.Settings.NATS.ConnectionPerStream {
-		nc, err := b.nats.NewConn(job.Settings.NATS)
+	if job.Settings.NATS.SharedConnection {
+		var err error
+		nc, err = b.nats.NewConn(job.Settings.NATS)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to create nats connection for job "+job.Settings.ID)
+			return nil, errors.Wrap(err, "failed to create single shared nats connection for job "+job.Settings.ID)
 		}
 
-		defer nc.Close()
-
-		js, err = nc.JetStream()
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create jetstream context for job %s"+job.Settings.ID)
-		}
+		defer nc.Drain()
 	}
 
 	for _, streamInfo := range job.Settings.Read.Streams {
-		if job.Settings.NATS.ConnectionPerStream {
-			nc, err := b.nats.NewConn(job.Settings.NATS)
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create nats connection for stream "+streamInfo.StreamName)
-			}
-
-			defer nc.Close()
-
-			js, err = nc.JetStream()
-			if err != nil {
-				return nil, errors.Wrap(err, "failed to create jetstream context for stream "+streamInfo.StreamName)
-			}
-		}
-
 		for i := 0; i < job.Settings.Read.NumWorkersPerStream; i++ {
 			if workerMap[streamInfo.StreamName] == nil {
 				workerMap[streamInfo.StreamName] = make(map[int]*Worker, 0)
 			}
 
-			ctx, cancel := context.WithCancel(context.Background())
-
 			workerMap[streamInfo.StreamName][workerID] = &Worker{
-				WorkerID:  workerID,
-				StartedAt: time.Now(),
-				Errors:    make([]string, 0),
-				ctx:       ctx,    // Worker specific context; read from by worker
-				cancel:    cancel, // Worker specific cancel; used by monitor to signal worker to stop
+				WorkerID: workerID,
+				Errors:   make([]string, 0),
 			}
 
 			wg.Add(1)
 
-			go b.runReaderWorker(job, js, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
+			go b.runReaderWorker(job, nc, workerID, streamInfo, workerMap[streamInfo.StreamName][workerID], wg)
 
 			workerID++
 		}
@@ -92,73 +67,26 @@ func (b *Bench) runReadBenchmark(job *types.Job) (*types.Status, error) {
 	// Launch periodic workerMap aggregation & reporting
 	go b.runReporter(doneCh, job, workerMap)
 
-	// Monitor overall work and inform workers when to stop
-	go b.runReaderMonitor(doneCh, job, workerMap)
-
 	// Wait for all workers to finish
 	wg.Wait()
 
 	// Stop reporter & monitor
 	close(doneCh)
 
-	// Hack: It's possible other nodes are lagging behind this node - wait a little bit
-	// before we write final status
-	time.Sleep(5 * time.Second)
+	var status types.JobStatus
 
-	// Calculate the final status
-	return b.calculateStats(job.Settings, workerMap, types.CompletedStatus, "; final"), nil
-}
-
-func (b *Bench) runReaderMonitor(doneCh chan struct{}, job *types.Job, workerMap map[string]map[int]*Worker) {
-	llog := b.log.WithFields(logrus.Fields{
-		"method": "runReaderMonitor",
-		"job":    job.Settings.ID,
-	})
-
-	ticker := time.NewTicker(MonitorFrequency)
-
-	finishedStreams := map[string]bool{}
-
-MAIN:
-	for {
-		select {
-		case <-ticker.C:
-			for stream, numRead := range b.calculateNumRead(workerMap) {
-				// Nothing to cancel for an already finished stream
-				if _, ok := finishedStreams[stream]; ok {
-					continue
-				}
-
-				if numRead >= job.Settings.Read.NumMessagesPerStream {
-					// Tell workgroup to stop
-					for _, worker := range workerMap[stream] {
-						llog.Debugf("signalling worker '%d' for stream '%s' to stop", worker.WorkerID, stream)
-						go worker.cancel()
-					}
-
-					finishedStreams[stream] = true
-				}
-			}
-		case <-doneCh:
-			// Job has been completed
-			llog.Debug("job completed")
-			break MAIN
-		case <-job.Context.Done():
-			// Job has been deleted - tell all workers to exit
-			llog.Debug("job asked to abort")
-
-			for _, stream := range workerMap {
-				for _, worker := range stream {
-					llog.Debugf("signalling worker '%d' to stop", worker.WorkerID)
-					go worker.cancel()
-				}
-			}
-
-			break MAIN
+	// Was this job cancelled? (in select to avoid blocking if not cancelled)
+	select {
+	case _, ok := <-job.Context.Done():
+		if !ok {
+			status = types.CancelledStatus
 		}
+	default:
+		status = types.CompletedStatus
 	}
 
-	llog.Debug("exiting")
+	// Calculate the final status
+	return b.calculateStats(job.Settings, job.NodeID, workerMap, status, "; final"), nil
 }
 
 func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[string]int {
@@ -173,9 +101,10 @@ func (b *Bench) calculateNumRead(workerMap map[string]map[int]*Worker) map[strin
 	return numRead
 }
 
-func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, streamInfo *types.StreamInfo, worker *Worker, wg *sync.WaitGroup) {
+	var myNC = nc
+
 	defer func() {
-		worker.EndedAt = time.Now()
 		wg.Done()
 	}()
 
@@ -187,7 +116,27 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 
 	llog.Debugf("worker starting")
 
-	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.ConsumerGroupName)
+	if !job.Settings.NATS.SharedConnection {
+		var err error
+		myNC, err = b.nats.NewConn(job.Settings.NATS)
+		if err != nil {
+			b.log.Log(logrus.ErrorLevel, "can't get connection for individual worker: ", err)
+			return
+		}
+
+		defer myNC.Drain()
+	} else if nc == nil {
+		b.log.Error("worker not passed a valid shared NATS Connection")
+		return
+	}
+
+	js, err := myNC.JetStream(nats.Context(job.Context))
+	if err != nil {
+		b.log.Log(logrus.ErrorLevel, "can't get JS context in ReaderWorker")
+		return
+	}
+
+	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.DurableName)
 	if err != nil {
 		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
 		worker.Errors = append(worker.Errors, err.Error())
@@ -202,10 +151,22 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 		}
 	}()
 
-	for {
-		llog.Debugf("worker has read %d messages", worker.NumRead)
+	targetNumberOfReads := job.Settings.Read.NumMessagesPerStream / (job.Settings.Read.NumWorkersPerStream * job.Settings.Read.NumNodes)
 
-		msgs, err := sub.Fetch(job.Settings.Read.BatchSize, nats.Context(worker.ctx))
+	worker.StartedAt = time.Now().UTC()
+
+	for worker.NumRead < targetNumberOfReads {
+		llog.Debugf("worker has read %d messages out of %d", worker.NumRead, targetNumberOfReads)
+
+		batchSize := func() int {
+			if job.Settings.Read.BatchSize <= (targetNumberOfReads - worker.NumRead) {
+				return job.Settings.Read.BatchSize
+			} else {
+				return targetNumberOfReads - worker.NumRead
+			}
+		}()
+
+		msgs, err := sub.Fetch(batchSize, nats.Context(job.Context))
 		if err != nil {
 			if strings.Contains(err.Error(), "context canceled") {
 				llog.Debug("worker asked to exit")
@@ -213,6 +174,9 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 				break
 			}
 
+			if err == nats.ErrTimeout {
+				llog.Warn("Fetch timeout")
+			}
 			pendingStr := "N/A"
 
 			pending, _, pendingErr := sub.Pending()
@@ -237,14 +201,17 @@ func (b *Bench) runReaderWorker(job *types.Job, js nats.JetStreamContext, worker
 			continue
 		}
 
+		worker.NumRead += len(msgs)
+
 		for _, msg := range msgs {
+			// Do not pass ctx to Ack - it will cause the ack to be sync (and slow)
 			if err := msg.Ack(); err != nil {
 				llog.Warningf("unable to ack message: %s", err)
 			}
-
-			worker.NumRead++
 		}
 	}
+
+	worker.EndedAt = time.Now().UTC()
 
 	llog.Debugf("worker exiting; '%d' read, '%d' errors", worker.NumRead, worker.NumErrors)
 }

@@ -33,6 +33,11 @@ func (h *HTTPService) getBenchmarkHandler(rw http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Clear node reports unless "full" is specified
+	if _, ok := r.URL.Query()["full"]; !ok {
+		status.NodeReports = nil
+	}
+
 	settings, err := h.nats.GetSettings(id)
 	if err != nil {
 		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to get settings: %s", err), rw)
@@ -53,6 +58,36 @@ func (h *HTTPService) getAllBenchmarksHandler(rw http.ResponseWriter, r *http.Re
 	}
 
 	writeJSON(http.StatusOK, allSettings, rw)
+}
+
+func (h *HTTPService) purgeAllHandler(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		h.log.Errorf("could not read request body: %s", err)
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("could not read request body: %s", err), rw)
+		return
+	}
+	defer r.Body.Close()
+
+	purgeRequest := &types.PurgeRequest{}
+
+	if err := json.Unmarshal(body, purgeRequest); err != nil {
+		h.log.Errorf("unable to unmarshal purge request: %s", err)
+		writeErrorJSON(http.StatusBadRequest, fmt.Sprintf("unable to unmarshal purge request: %s", err), rw)
+		return
+	}
+
+	if !purgeRequest.All {
+		writeErrorJSON(http.StatusBadRequest, "'all' must be set to true to purge", rw)
+		return
+	}
+
+	if err := h.bench.Purge(purgeRequest); err != nil {
+		writeErrorJSON(http.StatusInternalServerError, fmt.Sprintf("unable to purge: %s", err.Error()), rw)
+		return
+	}
+
+	writeJSON(http.StatusOK, map[string]string{"message": "purge initiated"}, rw)
 }
 
 func (h *HTTPService) deleteBenchmarkHandler(rw http.ResponseWriter, r *http.Request, ps httprouter.Params) {
@@ -230,6 +265,18 @@ func validateWriteSettings(ws *types.WriteSettings) error {
 
 	if ws.NumMessagesPerStream == 0 {
 		ws.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
+	}
+
+	if ws.BatchSize < 1 {
+		ws.BatchSize = bench.DefaultBatchSize
+	}
+
+	if ws.Storage == "" {
+		ws.Storage = types.MemoryStreamType
+	}
+
+	if ws.Storage != types.MemoryStreamType && ws.Storage != types.FileStorageType {
+		return errors.New("unrecognized storage type")
 	}
 
 	return nil

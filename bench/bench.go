@@ -1,7 +1,6 @@
 package bench
 
 import (
-	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -41,9 +40,6 @@ type Worker struct {
 	Errors     []string
 	StartedAt  time.Time
 	EndedAt    time.Time
-
-	ctx    context.Context
-	cancel context.CancelFunc
 }
 
 func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
@@ -64,6 +60,63 @@ func New(p *cli.Params, nsvc *natssvc.NATSService) (*Bench, error) {
 	}, nil
 }
 
+func (b *Bench) Purge(req *types.PurgeRequest) error {
+	if req == nil {
+		return errors.New("purge request cannot be nil")
+	}
+
+	if !req.All {
+		return errors.New("'all' is false - won't purge")
+	}
+
+	// Get all jobs
+	settings, err := b.nats.GetAllSettings()
+	if err != nil {
+		return errors.Wrap(err, "unable to fetch existing settings")
+	}
+
+	if len(settings) == 0 {
+		b.log.Debugf("no settings found, not emitting jobs")
+	} else {
+		// Create delete jobs for each node
+		jobs, err := b.GenerateDeleteAllJobs()
+		if err != nil {
+			return errors.Wrap(err, "unable to generate delete jobs for purge")
+		}
+
+		// Emit delete jobs
+		if err := b.nats.EmitJobs(types.DeleteJob, jobs); err != nil {
+			return errors.Wrap(err, "unable to emit delete jobs for purge")
+		}
+	}
+
+	var errorCount int
+
+	for _, cfg := range settings {
+		// Delete settings
+		if err := b.nats.DeleteSettings(cfg.ID); err != nil {
+			b.log.Warningf("unable to delete settings for job '%s': %s", cfg.ID, err)
+			errorCount++
+		}
+
+		// Delete results
+		if err := b.nats.DeleteResults(cfg.ID); err != nil {
+			b.log.Warningf("unable to delete results for job '%s': %s", cfg.ID, err)
+			errorCount++
+		}
+
+		// Delete streams
+		if err := b.nats.DeleteStreams(cfg.ID); err != nil {
+			b.log.Warningf("unable to delete streams for job '%s': %s", cfg.ID, err)
+			errorCount++
+		}
+	}
+
+	b.log.Debugf("purge completed %d jobs, %d errors", len(settings), errorCount)
+
+	return nil
+}
+
 func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResults bool) error {
 	// Create delete jobs
 	deleteJobs, err := b.GenerateDeleteJobs(jobID)
@@ -75,6 +128,8 @@ func (b *Bench) Delete(jobID string, deleteStreams, deleteSettings, deleteResult
 	if err := b.nats.EmitJobs(types.DeleteJob, deleteJobs); err != nil {
 		return errors.Wrap(err, "unable to emit delete jobs")
 	}
+
+	// TODO: Wait for 3s to see if any errors are reported
 
 	// Delete settings
 	if deleteSettings {
@@ -116,10 +171,12 @@ MAIN:
 			llog.Debug("job completed")
 			break MAIN
 		case <-ticker.C:
-			aggregateStats := b.calculateStats(job.Settings, workerMap, types.InProgressStatus, "; ticker")
+			aggregateStats := b.calculateStats(job.Settings, job.NodeID, workerMap, types.InProgressStatus, "; ticker")
 
 			if err := b.nats.WriteStatus(aggregateStats); err != nil {
-				b.log.Error("unable to write status", "error", err)
+				b.log.Error("> unable to write status", err)
+				b.log.Debugf("AGGREGATE: %+v", aggregateStats)
+
 			}
 		}
 	}
@@ -141,9 +198,12 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 	}
 
 	finalStatus := &types.Status{}
-	var rateTotal float64
 
-	for _, key := range keys {
+	var totalPerNodeAverages = float64(0)
+	var totalNumberOfNodesReporting = 0
+	nodeReports := make([]*types.NodeReport, len(keys))
+
+	for i, key := range keys {
 		b.log.Debugf("looking up results in bucket '%s', object '%s'", fullBucketName, key)
 
 		entry, err := bucket.Get(key)
@@ -158,19 +218,16 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 		}
 
 		finalStatus.JobID = s.JobID
-		finalStatus.NodeID = s.NodeID
 		finalStatus.Message = s.Message
-		finalStatus.TotalProcessed = finalStatus.TotalProcessed + s.TotalProcessed
-		finalStatus.TotalErrors = finalStatus.TotalErrors + s.TotalErrors
+		finalStatus.TotalProcessed += s.TotalProcessed
+		finalStatus.TotalErrors += s.TotalErrors
+		totalPerNodeAverages += s.AvgMsgPerSecPerNode
+		totalNumberOfNodesReporting++
 
 		finalStatus.Status = s.Status
 
 		if len(s.Errors) != 0 {
 			finalStatus.Errors = append(finalStatus.Errors, s.Errors...)
-		}
-
-		if s.ElapsedSeconds > finalStatus.ElapsedSeconds {
-			finalStatus.ElapsedSeconds = s.ElapsedSeconds
 		}
 
 		if finalStatus.StartedAt.IsZero() {
@@ -187,24 +244,22 @@ func (b *Bench) Status(id string) (*types.Status, error) {
 			finalStatus.EndedAt = s.EndedAt
 		}
 
-		avgMsgPerSec := float64(finalStatus.TotalProcessed) / finalStatus.ElapsedSeconds
-		rateTotal += avgMsgPerSec
-
-		// If we don't have a message rate yet, set it to the first one we get
-		if finalStatus.AvgMsgPerSecPerNode == 0 {
-			finalStatus.AvgMsgPerSecPerNode = avgMsgPerSec
-		} else {
-			finalStatus.AvgMsgPerSecPerNode = (finalStatus.AvgMsgPerSecAllNodes + avgMsgPerSec) / 2
+		nodeReports[i] = &types.NodeReport{
+			Streams: s.NodeReport.Streams,
 		}
-
 	}
 
-	finalStatus.AvgMsgPerSecAllNodes = rateTotal / float64(len(keys))
+	// Make stats more readable -- lower decimal point, deal with unfinished job
+	if finalStatus.EndedAt.IsZero() {
+		finalStatus.ElapsedSeconds = round(time.Now().UTC().Sub(finalStatus.StartedAt).Seconds(), 2)
+	} else {
+		finalStatus.ElapsedSeconds = round(finalStatus.EndedAt.Sub(finalStatus.StartedAt).Seconds(), 2)
+	}
 
-	// Make stats more readable
-	finalStatus.ElapsedSeconds = round(finalStatus.ElapsedSeconds, 2)
-	finalStatus.AvgMsgPerSecPerNode = round(finalStatus.AvgMsgPerSecPerNode, 2)
-	finalStatus.AvgMsgPerSecAllNodes = round(finalStatus.AvgMsgPerSecAllNodes, 2)
+	finalStatus.TotalMsgPerSecAllNodes = round(totalPerNodeAverages, 2)
+	finalStatus.AvgMsgPerSecPerNode = round(totalPerNodeAverages/float64(totalNumberOfNodesReporting), 2)
+
+	finalStatus.NodeReports = nodeReports
 
 	return finalStatus, nil
 }
@@ -217,7 +272,16 @@ func (b *Bench) createProducer(settings *types.Settings) (string, error) {
 	return "", nil
 }
 
-func (b *Bench) createConsumerGroups(settings *types.Settings, streams []string) ([]*types.StreamInfo, error) {
+// in order to be able to run a read bench multiple times in a row the durable consumer must be deleted between runs
+// it's much easier to just delete the consumers (if they exist, they would not the first time the read bench is run,
+// hence ignoring the error) right before re-creating them
+func (b *Bench) deleteDurableConsumers(streams []string) {
+	for _, stream := range streams {
+		b.nats.DeleteDurableConsumer(stream)
+	}
+}
+
+func (b *Bench) createDurableConsumers(settings *types.Settings, streams []string) ([]*types.StreamInfo, error) {
 	if err := validateConsumerSettings(settings); err != nil {
 		return nil, errors.Wrap(err, "unable to validate consumer settings")
 	}
@@ -225,20 +289,22 @@ func (b *Bench) createConsumerGroups(settings *types.Settings, streams []string)
 	streamInfo := make([]*types.StreamInfo, 0)
 
 	for _, streamName := range streams {
-		consumerGroupName := "njst-cg-" + streamName + "-" + settings.ID
+		durableName := streamName + "-durable"
 
-		if _, err := b.nats.AddConsumer(streamName, &nats.ConsumerConfig{
-			Durable:     consumerGroupName,
-			Description: "njst consumer",
-			AckPolicy:   nats.AckExplicitPolicy, // TODO: This should be configurable
+		if _, err := b.nats.AddDurableConsumer(streamName, &nats.ConsumerConfig{
+			Durable:       durableName,
+			Description:   "njst consumer",
+			DeliverPolicy: nats.DeliverAllPolicy,
+			AckPolicy:     nats.AckExplicitPolicy, // TODO: This should be configurable
+			ReplayPolicy:  nats.ReplayInstantPolicy,
 		}); err != nil {
 			return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
-				consumerGroupName, streamName, err)
+				durableName, streamName, err)
 		}
 
 		streamInfo = append(streamInfo, &types.StreamInfo{
-			StreamName:        streamName,
-			ConsumerGroupName: consumerGroupName,
+			StreamName:  streamName,
+			DurableName: durableName,
 		})
 	}
 
@@ -267,7 +333,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	}
 
 	if settings.Read.NumNodes > len(nodes) {
-		return nil, errors.Errorf("%d nodes requested but only %d available", settings.Read.NumNodes, len(nodes))
+		return nil, errors.Errorf("%d nodes requested but %d available", settings.Read.NumNodes, len(nodes))
 	}
 
 	if settings.Read.WriteID == "" {
@@ -278,7 +344,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	streams := b.nats.GetStreams("njst-" + settings.Read.WriteID + "-")
 
 	if len(streams) < settings.Read.NumStreams {
-		return nil, errors.Errorf("%d streams requested but only %d available", settings.Read.NumStreams, len(streams))
+		return nil, errors.Errorf("%d streams requested but %d available", settings.Read.NumStreams, len(streams))
 	}
 
 	if len(streams) > settings.Read.NumStreams {
@@ -295,13 +361,8 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 		if uint64(settings.Read.NumMessagesPerStream) > info.State.Msgs {
 			return nil, fmt.Errorf("stream '%s' does not contain enough messages to satisfy read request", stream)
 		}
-
 		// Can we fit at least 1 batch per worker? <- Is this needed? Is batch best effort?
-	}
-
-	streamInfo, err := b.createConsumerGroups(settings, streams)
-	if err != nil {
-		return nil, errors.Wrap(err, "unable to create consumer")
+		// JNM: the answer is no you don't need it because the batch size passed to the Fetch() call is indeed a 'max number of messages returned back' (i.e. 'best effort')
 	}
 
 	jobs := make([]*types.Job, 0)
@@ -315,22 +376,14 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 		numSelectedNodes = settings.Read.NumNodes
 	}
 
-	if settings.Read.NumStreams < numSelectedNodes {
-		numSelectedNodes = settings.Read.NumStreams
+	b.deleteDurableConsumers(streams)
+
+	streamInfo, err := b.createDurableConsumers(settings, streams)
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to create consumer")
 	}
 
-	streamsPerNode := settings.Read.NumStreams / numSelectedNodes
-	streamsPerLastNode := streamsPerNode + (settings.Read.NumStreams % numSelectedNodes)
-
-	var startIndex int
-
 	for i := 0; i < numSelectedNodes; i++ {
-		numStreams := streamsPerNode
-
-		// If this the last node, add remainder streams (if any)
-		if i == numSelectedNodes-1 {
-			numStreams = streamsPerLastNode
-		}
 
 		jobs = append(jobs, &types.Job{
 			NodeID: nodes[i],
@@ -339,17 +392,17 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 				NATS:        settings.NATS,
 				Description: settings.Description,
 				Read: &types.ReadSettings{
+					NumStreams:           settings.Read.NumStreams,
+					NumNodes:             numSelectedNodes,
 					NumMessagesPerStream: settings.Read.NumMessagesPerStream,
 					NumWorkersPerStream:  settings.Read.NumWorkersPerStream,
-					Streams:              generateStreams(startIndex, numStreams, streamInfo),
+					Streams:              streamInfo,
 					BatchSize:            settings.Read.BatchSize,
 				},
 			},
 			CreatedBy: b.params.NodeID,
 			CreatedAt: time.Now().UTC(),
 		})
-
-		startIndex = startIndex + streamsPerNode
 	}
 
 	return jobs, nil
@@ -366,10 +419,16 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	}
 
 	if settings.Write.NumNodes > len(nodes) {
-		return nil, errors.Errorf("unable to create write jobs: %d nodes requested but only %d available", settings.Write.NumNodes, len(nodes))
+		return nil, errors.Errorf("unable to create write jobs: %d nodes requested but %d available", settings.Write.NumNodes, len(nodes))
 	}
 
 	streamPrefix := fmt.Sprintf("njst-%s", settings.ID)
+
+	storageType := nats.MemoryStorage
+
+	if settings.Write.Storage == types.FileStorageType {
+		storageType = nats.FileStorage
+	}
 
 	// Create streams
 	for i := 0; i < settings.Write.NumStreams; i++ {
@@ -379,7 +438,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 			Name:        streamName,
 			Description: "njst bench stream",
 			Subjects:    []string{streamName},
-			Storage:     nats.MemoryStorage,
+			Storage:     storageType,
 			Replicas:    settings.Write.NumReplicas,
 		}); err != nil {
 			return nil, errors.Wrapf(err, "unable to create stream '%s'", streamName)
@@ -397,22 +456,9 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 		numSelectedNodes = settings.Write.NumNodes
 	}
 
-	if settings.Write.NumStreams < numSelectedNodes {
-		numSelectedNodes = settings.Write.NumStreams
-	}
-
-	streamsPerNode := settings.Write.NumStreams / numSelectedNodes
-	streamsPerLastNode := streamsPerNode + (settings.Write.NumStreams % numSelectedNodes)
-
-	var startIndex int
+	settings.Write.NumNodes = numSelectedNodes
 
 	for i := 0; i < numSelectedNodes; i++ {
-		numStreams := streamsPerNode
-
-		// If this the last node, add remainder streams (if any)
-		if i == numSelectedNodes-1 {
-			numStreams = streamsPerLastNode
-		}
 
 		jobs = append(jobs, &types.Job{
 			NodeID: nodes[i],
@@ -421,46 +467,31 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 				ID:          settings.ID,
 				Description: settings.Description,
 				Write: &types.WriteSettings{
+					NumStreams:           settings.Write.NumStreams,
+					NumNodes:             settings.Write.NumNodes,
 					NumMessagesPerStream: settings.Write.NumMessagesPerStream,
 					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
 					MsgSizeBytes:         settings.Write.MsgSizeBytes,
 					KeepStreams:          settings.Write.KeepStreams,
-					Subjects:             generateSubjects(startIndex, numStreams, streamPrefix),
+					Subjects:             generateStreams(settings.Write.NumStreams, streamPrefix),
 				},
 			},
 			CreatedBy: b.params.NodeID,
 			CreatedAt: time.Now().UTC(),
 		})
-
-		startIndex = startIndex + streamsPerNode
 	}
 
 	return jobs, nil
 }
 
-func generateStreams(startIndex int, numStreams int, existingStreams []*types.StreamInfo) []*types.StreamInfo {
-	streams := make([]*types.StreamInfo, 0)
+func generateStreams(numStreams int, streamPrefix string) []string {
+	streams := make([]string, 0)
 
-	for i := startIndex; i < numStreams+startIndex; i++ {
-		logrus.Debugf("generateStreams: adding stream '%s' consumer group '%s'\n", existingStreams[i].StreamName, existingStreams[i].ConsumerGroupName)
-
-		streams = append(streams, &types.StreamInfo{
-			StreamName:        existingStreams[i].StreamName,
-			ConsumerGroupName: existingStreams[i].ConsumerGroupName,
-		})
+	for i := 0; i != numStreams; i++ {
+		streams = append(streams, fmt.Sprintf("%s-%d", streamPrefix, i))
 	}
 
 	return streams
-}
-
-func generateSubjects(startIndex int, numSubjects int, subjectPrefix string) []string {
-	subjects := make([]string, 0)
-
-	for i := startIndex; i != numSubjects+startIndex; i++ {
-		subjects = append(subjects, fmt.Sprintf("%s-%d", subjectPrefix, i))
-	}
-
-	return subjects
 }
 
 func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, error) {
@@ -475,12 +506,48 @@ func (b *Bench) GenerateCreateJobs(settings *types.Settings) ([]*types.Job, erro
 		jobs, err = b.createReadJobs(settings)
 	} else if settings.Write != nil {
 		jobs, err = b.createWriteJobs(settings)
+		b.log.Debugf("%d write jobs created", len(jobs))
+
+		for i, j := range jobs {
+			b.log.Debugf("job #%d, nodes: %d, streams: %d, messages/stream: %d, workers/stream: %d",
+				i, j.Settings.Write.NumNodes, j.Settings.Write.NumStreams, j.Settings.Write.NumMessagesPerStream, j.Settings.Write.NumWorkersPerStream)
+		}
 	} else {
 		return nil, errors.New("settings must have either read or write set")
 	}
 
 	if err != nil {
 		return nil, errors.Wrap(err, "unable to create jobs")
+	}
+
+	return jobs, nil
+}
+
+func (b *Bench) GenerateDeleteAllJobs() ([]*types.Job, error) {
+	nodes, err := b.nats.GetNodeList()
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to get node list")
+	}
+
+	jobs := make([]*types.Job, 0)
+
+	// Get all settings
+	settings, err := b.nats.GetAllSettings()
+	if err != nil {
+		return nil, errors.Wrap(err, "unable to fetch settings")
+	}
+
+	for _, node := range nodes {
+		for _, cfg := range settings {
+			jobs = append(jobs, &types.Job{
+				NodeID: node,
+				Settings: &types.Settings{
+					ID: cfg.ID,
+				},
+				CreatedBy: "njst purge",
+				CreatedAt: time.Now().UTC(),
+			})
+		}
 	}
 
 	return jobs, nil

@@ -148,7 +148,7 @@ func (n *NATSService) WriteStatus(status *types.Status) error {
 
 	data, err := json.Marshal(status)
 	if err != nil {
-		return errors.Wrapf(err, "unable to marshal status for job '%s'", status.JobID)
+		return errors.Wrapf(err, "> unable to marshal status for job '%s'", status.JobID)
 	}
 
 	if _, err := bucket.Put(status.NodeID, data); err != nil {
@@ -487,8 +487,12 @@ func (n *NATSService) GetSettings(id string) (*types.Settings, error) {
 	return settings, nil
 }
 
-func (n *NATSService) AddConsumer(stream string, cfg *nats.ConsumerConfig, opts ...nats.JSOpt) (*nats.ConsumerInfo, error) {
+func (n *NATSService) AddDurableConsumer(stream string, cfg *nats.ConsumerConfig, opts ...nats.JSOpt) (*nats.ConsumerInfo, error) {
 	return n.js.AddConsumer(stream, cfg, opts...)
+}
+
+func (n *NATSService) DeleteDurableConsumer(stream string) error {
+	return n.js.DeleteConsumer(stream, stream+"-durable")
 }
 
 func (n *NATSService) GetAllSettings() ([]*types.Settings, error) {

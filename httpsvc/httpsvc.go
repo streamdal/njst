@@ -75,6 +75,7 @@ func (h *HTTPService) Start() error {
 
 	router.HandlerFunc("GET", "/bench", h.getAllBenchmarksHandler)
 	router.Handle("GET", "/bench/:id", h.getBenchmarkHandler)
+	router.Handle("POST", "/bench/purge", h.purgeAllHandler)
 	router.Handle("DELETE", "/bench/:id", h.deleteBenchmarkHandler)
 	router.HandlerFunc("POST", "/bench", h.createBenchmarkHandler)
 
