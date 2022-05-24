@@ -22,7 +22,7 @@ const (
 	DefaultMsgSizeBytes         = 1024
 	DefaultNumMessagesPerStream = 10000
 	DefaultNumWorkersPerStream  = 1
-	DefaultNumSubjects          = 1
+	DefaultSubject              = "default"
 )
 
 type Bench struct {
@@ -296,7 +296,7 @@ func (b *Bench) createDurableConsumers(settings *types.Settings, streams []strin
 			Durable:       durableName,
 			Description:   "njst consumer",
 			DeliverPolicy: nats.DeliverAllPolicy,
-			AckPolicy:     nats.AckExplicitPolicy, // TODO: This should be configurable
+			AckPolicy:     nats.AckExplicitPolicy,
 			ReplayPolicy:  nats.ReplayInstantPolicy,
 		}); err != nil {
 			return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
@@ -436,8 +436,8 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 		streamName := fmt.Sprintf("%s-%d", streamPrefix, i)
 		streamSubjects := make([]string, 0)
 
-		for s := 0; s < settings.Write.NumSubjectsPerStream; s++ {
-			streamSubjects = append(streamSubjects, fmt.Sprintf("%s.%d", streamName, s))
+		for _, subj := range settings.Write.Subjects {
+			streamSubjects = append(streamSubjects, streamName+"."+subj)
 		}
 
 		if _, err := b.nats.AddStream(&nats.StreamConfig{
@@ -464,6 +464,8 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 
 	settings.Write.NumNodes = numSelectedNodes
 
+	logrus.Debugf("Subjects: %+v", settings.Write.Subjects)
+
 	for i := 0; i < numSelectedNodes; i++ {
 
 		jobs = append(jobs, &types.Job{
@@ -479,7 +481,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
 					MsgSizeBytes:         settings.Write.MsgSizeBytes,
 					KeepStreams:          settings.Write.KeepStreams,
-					NumSubjectsPerStream: settings.Write.NumSubjectsPerStream,
+					Subjects:             settings.Write.Subjects,
 					Streams:              generateStreams(settings.Write.NumStreams, streamPrefix),
 				},
 			},

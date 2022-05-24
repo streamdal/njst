@@ -39,8 +39,8 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / (job.Settings.Write.NumNodes * job.Settings.Write.NumWorkersPerStream)
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
 
-	numMessagesPerWorkerPerSubject := numMessagesPerWorker / job.Settings.Write.NumSubjectsPerStream
-	numMessagesPerLastWorkerPerSubject := numMessagesPerWorkerPerSubject + (numMessagesPerLastWorker % job.Settings.Write.NumSubjectsPerStream)
+	numMessagesPerWorkerPerSubject := numMessagesPerWorker / len(job.Settings.Write.Subjects)
+	numMessagesPerLastWorkerPerSubject := numMessagesPerWorkerPerSubject + (numMessagesPerLastWorker % len(job.Settings.Write.Subjects))
 
 	var nc *nats.Conn
 
@@ -150,12 +150,14 @@ func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, str
 	worker.StartedAt = time.Now().UTC()
 
 MAIN:
-	for s := 0; s < job.Settings.Write.NumSubjectsPerStream; s++ {
+	for _, subj := range job.Settings.Write.Subjects {
 		for i := 0; i < numMessages; i += batchSize {
 			futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
 
 			for j := 0; j < batchSize && i+j < numMessages; j++ {
-				futures[j], err = js.PublishAsync(fmt.Sprintf("%s.%d", stream, s), data)
+				fullSubj := fmt.Sprintf("%s.%s", stream, subj)
+
+				futures[j], err = js.PublishAsync(fullSubj, data)
 				if err != nil {
 					llog.Errorf("unable to JS async publish message: %s", err)
 					worker.NumErrors++

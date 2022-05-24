@@ -37,7 +37,7 @@ type WriteSettings struct {
 	NumNodes             int         `json:"num_nodes"`
 	NumMessagesPerStream int         `json:"num_messages_per_stream"`
 	NumWorkersPerStream  int         `json:"num_workers_per_stream"`
-	NumSubjectsPerStream int         `json:"num_subjects_per_stream"`
+	Subjects             []string    `json:"subjects"`
 	NumReplicas          int         `json:"num_replicas"`
 	BatchSize            int         `json:"batch_size"`
 	MsgSizeBytes         int         `json:"msg_size_bytes"`
@@ -45,7 +45,7 @@ type WriteSettings struct {
 	Storage              StorageType `json:"storage"`
 
 	// Filled out by bench.GenerateCreateJobs
-	Streams []string `json:"subjects,omitempty"`
+	Streams []string `json:"streams,omitempty"`
 }
 
 const (
