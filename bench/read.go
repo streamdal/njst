@@ -136,9 +136,9 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 		return
 	}
 
-	sub, err := js.PullSubscribe(streamInfo.StreamName, streamInfo.DurableName)
+	sub, err := js.PullSubscribe(streamInfo.SubjectName, streamInfo.DurableName)
 	if err != nil {
-		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.StreamName, err)
+		llog.Errorf("unable to subscribe to stream '%s': %v", streamInfo.SubjectName, err)
 		worker.Errors = append(worker.Errors, err.Error())
 		worker.NumErrors++
 
@@ -151,7 +151,7 @@ func (b *Bench) runReaderWorker(job *types.Job, nc *nats.Conn, workerID int, str
 		}
 	}()
 
-	targetNumberOfReads := job.Settings.Read.NumMessagesPerStream / (job.Settings.Read.NumWorkersPerStream * job.Settings.Read.NumNodes)
+	targetNumberOfReads := (job.Settings.Read.NumMessagesPerStream / (job.Settings.Read.NumWorkersPerStream * job.Settings.Read.NumNodes)) / len(job.Settings.Read.Subjects)
 
 	worker.StartedAt = time.Now().UTC()
 

@@ -12,13 +12,22 @@ testing reads with durable consumers.
 **NOTE: While benchmarks are dumb, this will at least give you a _general_ idea 
 about the performance capabilities of your NATS cluster.**
 
+**NOTE 2: You might see some discrepancy in performance between `njst` and `nats bench`.
+While slight deviation might be there due to `njst` missing some optimizations,
+the results should be close. If they are not, ensure that you are passing `--pull`
+to `nats bench` so that it uses durable pull consumers instead of ordered push
+consumers (which are much faster but do not require ACKs).**
+
 ## Features
 
+* Built *specifically* for testing JetStream
 * Distributed by default
 * No leader, no followers
 * Cloud native - works best in k8s
 * Simple [HTTP REST'ish API](./docs/api.md) for job control
 * Ability to perform *massively parallel* tests to (attempt to) simulate real-world stress
+* Uses _only_ durable pull consumers for reads
+* Multi-consumer, multi-worker workloads with support for `FilterSubject`
 
 ## Usage
 
@@ -35,12 +44,75 @@ node(s) to it via env vars or flags.
    2. Open terminal two: `go run main.go --debug --http-address=:5001`
 3. Verify that both `njst` nodes are in the cluster: 
    ```bash
-      ❯ curl --request GET --url http://localhost:5000/cluster
+      ❯ curl --request GET --url http://localhost:5000/bench/cluster
       {"nodes":["489e8fd7","6ebcb9bb"],"count":2}
    ```
 4. Perform a test
    ```bash
+   curl -X POST -L \
+    --url http://localhost:5000/bench/ \
+    --header 'Content-Type: application/json' \
+    --data '{
+       "description": "128",
+       "nats": {
+         "address": "127.0.0.1",
+         "shared_connection": false
+       },
+       "write": {
+         "num_nodes": 1,
+         "num_streams": 1,
+         "num_messages_per_stream": 1000,
+         "num_workers_per_stream": 1,
+         "msg_size_bytes": 24,
+         "keep_streams": false,
+         "batch_size": 100,
+         "storage": "memory",
+         "subjects": ["1", "2"]
+       }
+    }'
+   {"id":"srOqCKmq","message":"benchmark created successfully; created 1 jobs"}
    ```
+5. Grab the returned id and check its status
+    ```bash
+    ❯ curl -s http://localhost:5000/bench/srOqCKmq | jq
+    {
+      "status": {
+        "status": "completed",
+        "message": "benchmark completed; final",
+        "job_id": "srOqCKmq",
+        "elapsed_seconds": 0.05,
+        "avg_msg_per_sec_per_node": 18142.89,
+        "total_msg_per_sec_all_nodes": 18142.89,
+        "total_processed": 1000,
+        "total_errors": 0,
+        "started_at": "2022-05-25T04:24:23.498141Z",
+        "ended_at": "2022-05-25T04:24:23.553259Z"
+      },
+      "settings": {
+        "description": "128",
+        "nats": {
+          "address": "127.0.0.1",
+          "shared_connection": false
+        },
+        "write": {
+          "num_streams": 1,
+          "num_nodes": 1,
+          "num_messages_per_stream": 1000,
+          "num_workers_per_stream": 1,
+          "subjects": [
+            "1",
+            "2"
+          ],
+          "num_replicas": 0,
+          "batch_size": 100,
+          "msg_size_bytes": 24,
+          "keep_streams": false,
+          "storage": "memory"
+        },
+        "id": "srOqCKmq"
+      }
+    }
+    ```
 
 ### Production
 

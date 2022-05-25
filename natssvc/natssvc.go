@@ -491,8 +491,16 @@ func (n *NATSService) AddDurableConsumer(stream string, cfg *nats.ConsumerConfig
 	return n.js.AddConsumer(stream, cfg, opts...)
 }
 
-func (n *NATSService) DeleteDurableConsumer(stream string) error {
-	return n.js.DeleteConsumer(stream, stream+"-durable")
+func (n *NATSService) DeleteDurableConsumers(stream string) error {
+	for consumer := range n.js.ConsumerNames(stream) {
+		n.log.Debugf("attempting to delete consumer '%s' for stream '%s'", consumer, stream)
+
+		if err := n.js.DeleteConsumer(stream, consumer); err != nil {
+			return errors.Wrap(err, "unable to delete consumer")
+		}
+	}
+
+	return nil
 }
 
 func (n *NATSService) GetAllSettings() ([]*types.Settings, error) {

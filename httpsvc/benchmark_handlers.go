@@ -243,6 +243,10 @@ func validateReadSettings(rs *types.ReadSettings) error {
 		rs.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
 	}
 
+	if len(rs.Subjects) == 0 {
+		rs.Subjects = []string{bench.DefaultSubject}
+	}
+
 	return nil
 }
 
@@ -277,6 +281,10 @@ func validateWriteSettings(ws *types.WriteSettings) error {
 
 	if ws.Storage != types.MemoryStreamType && ws.Storage != types.FileStorageType {
 		return errors.New("unrecognized storage type")
+	}
+
+	if len(ws.Subjects) == 0 {
+		ws.Subjects = []string{bench.DefaultSubject}
 	}
 
 	return nil

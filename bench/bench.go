@@ -22,6 +22,7 @@ const (
 	DefaultMsgSizeBytes         = 1024
 	DefaultNumMessagesPerStream = 10000
 	DefaultNumWorkersPerStream  = 1
+	DefaultSubject              = "default"
 )
 
 type Bench struct {
@@ -277,7 +278,9 @@ func (b *Bench) createProducer(settings *types.Settings) (string, error) {
 // hence ignoring the error) right before re-creating them
 func (b *Bench) deleteDurableConsumers(streams []string) {
 	for _, stream := range streams {
-		b.nats.DeleteDurableConsumer(stream)
+		if err := b.nats.DeleteDurableConsumers(stream); err != nil {
+			b.log.Errorf("unable to delete durable consumer for stream '%s': %s", stream, err)
+		}
 	}
 }
 
@@ -289,23 +292,28 @@ func (b *Bench) createDurableConsumers(settings *types.Settings, streams []strin
 	streamInfo := make([]*types.StreamInfo, 0)
 
 	for _, streamName := range streams {
-		durableName := streamName + "-durable"
+		for _, subj := range settings.Read.Subjects {
+			durableName := streamName + "-" + subj + "-durable"
+			subjectName := streamName + "." + subj
 
-		if _, err := b.nats.AddDurableConsumer(streamName, &nats.ConsumerConfig{
-			Durable:       durableName,
-			Description:   "njst consumer",
-			DeliverPolicy: nats.DeliverAllPolicy,
-			AckPolicy:     nats.AckExplicitPolicy, // TODO: This should be configurable
-			ReplayPolicy:  nats.ReplayInstantPolicy,
-		}); err != nil {
-			return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
-				durableName, streamName, err)
+			if _, err := b.nats.AddDurableConsumer(streamName, &nats.ConsumerConfig{
+				Durable:       durableName,
+				Description:   "njst consumer",
+				DeliverPolicy: nats.DeliverAllPolicy,
+				AckPolicy:     nats.AckExplicitPolicy,
+				ReplayPolicy:  nats.ReplayInstantPolicy,
+				FilterSubject: subjectName,
+			}); err != nil {
+				return nil, errors.Wrapf(err, "unable to create consumer group '%s' for stream '%s': %s",
+					durableName, streamName, err)
+			}
+
+			streamInfo = append(streamInfo, &types.StreamInfo{
+				StreamName:  streamName,
+				DurableName: durableName,
+				SubjectName: subjectName,
+			})
 		}
-
-		streamInfo = append(streamInfo, &types.StreamInfo{
-			StreamName:  streamName,
-			DurableName: durableName,
-		})
 	}
 
 	return streamInfo, nil
@@ -363,6 +371,13 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 		}
 		// Can we fit at least 1 batch per worker? <- Is this needed? Is batch best effort?
 		// JNM: the answer is no you don't need it because the batch size passed to the Fetch() call is indeed a 'max number of messages returned back' (i.e. 'best effort')
+
+		// Is the stream configured for the requested subjects?
+		for _, subj := range settings.Read.Subjects {
+			if sliceContains(info.Config.Subjects, subj) {
+				return nil, fmt.Errorf("stream '%s' is not configured for subject '%s'", stream, subj)
+			}
+		}
 	}
 
 	jobs := make([]*types.Job, 0)
@@ -398,6 +413,7 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 					NumWorkersPerStream:  settings.Read.NumWorkersPerStream,
 					Streams:              streamInfo,
 					BatchSize:            settings.Read.BatchSize,
+					Subjects:             settings.Read.Subjects,
 				},
 			},
 			CreatedBy: b.params.NodeID,
@@ -406,6 +422,16 @@ func (b *Bench) createReadJobs(settings *types.Settings) ([]*types.Job, error) {
 	}
 
 	return jobs, nil
+}
+
+func sliceContains(slice []string, value string) bool {
+	for _, v := range slice {
+		if v == value {
+			return true
+		}
+	}
+
+	return false
 }
 
 func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) {
@@ -433,11 +459,16 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	// Create streams
 	for i := 0; i < settings.Write.NumStreams; i++ {
 		streamName := fmt.Sprintf("%s-%d", streamPrefix, i)
+		streamSubjects := make([]string, 0)
+
+		for _, subj := range settings.Write.Subjects {
+			streamSubjects = append(streamSubjects, streamName+"."+subj)
+		}
 
 		if _, err := b.nats.AddStream(&nats.StreamConfig{
 			Name:        streamName,
 			Description: "njst bench stream",
-			Subjects:    []string{streamName},
+			Subjects:    streamSubjects,
 			Storage:     storageType,
 			Replicas:    settings.Write.NumReplicas,
 		}); err != nil {
@@ -459,7 +490,6 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 	settings.Write.NumNodes = numSelectedNodes
 
 	for i := 0; i < numSelectedNodes; i++ {
-
 		jobs = append(jobs, &types.Job{
 			NodeID: nodes[i],
 			Settings: &types.Settings{
@@ -473,7 +503,8 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 					NumWorkersPerStream:  settings.Write.NumWorkersPerStream,
 					MsgSizeBytes:         settings.Write.MsgSizeBytes,
 					KeepStreams:          settings.Write.KeepStreams,
-					Subjects:             generateStreams(settings.Write.NumStreams, streamPrefix),
+					Subjects:             settings.Write.Subjects,
+					Streams:              generateStreams(settings.Write.NumStreams, streamPrefix),
 				},
 			},
 			CreatedBy: b.params.NodeID,

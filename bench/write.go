@@ -34,8 +34,13 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 	wg := &sync.WaitGroup{}
 
+	// If there are multiple subjects, each worker writes a portion of NumMessages
+	// to each subject
 	numMessagesPerWorker := job.Settings.Write.NumMessagesPerStream / (job.Settings.Write.NumNodes * job.Settings.Write.NumWorkersPerStream)
 	numMessagesPerLastWorker := numMessagesPerWorker + (job.Settings.Write.NumMessagesPerStream % job.Settings.Write.NumWorkersPerStream)
+
+	numMessagesPerWorkerPerSubject := numMessagesPerWorker / len(job.Settings.Write.Subjects)
+	numMessagesPerLastWorkerPerSubject := numMessagesPerWorkerPerSubject + (numMessagesPerLastWorker % len(job.Settings.Write.Subjects))
 
 	var nc *nats.Conn
 
@@ -49,13 +54,13 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 	}
 
 	// Launch workers; last one gets remainder
-	for _, subj := range job.Settings.Write.Subjects {
+	for _, stream := range job.Settings.Write.Streams {
 		for i := 0; i < job.Settings.Write.NumWorkersPerStream; i++ {
-			if _, ok := workerMap[subj]; !ok {
-				workerMap[subj] = make(map[int]*Worker, 0)
+			if _, ok := workerMap[stream]; !ok {
+				workerMap[stream] = make(map[int]*Worker, 0)
 			}
 
-			workerMap[subj][i] = &Worker{
+			workerMap[stream][i] = &Worker{
 				WorkerID: i,
 				Errors:   make([]string, 0),
 			}
@@ -64,9 +69,9 @@ func (b *Bench) runWriteBenchmark(job *types.Job) (*types.Status, error) {
 
 			// Last worker gets remaining messages
 			if i == job.Settings.Write.NumWorkersPerStream-1 {
-				go b.runWriterWorker(nc, job, i, subj, data, numMessagesPerLastWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(nc, job, i, stream, data, numMessagesPerLastWorkerPerSubject, workerMap[stream][i], wg)
 			} else {
-				go b.runWriterWorker(nc, job, i, subj, data, numMessagesPerWorker, workerMap[subj][i], wg)
+				go b.runWriterWorker(nc, job, i, stream, data, numMessagesPerWorkerPerSubject, workerMap[stream][i], wg)
 			}
 		}
 	}
@@ -100,7 +105,7 @@ func min(a, b int) int {
 	return b
 }
 
-func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, subj string, data []byte, numMessages int, worker *Worker, wg *sync.WaitGroup) {
+func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, stream string, data []byte, numMessages int, worker *Worker, wg *sync.WaitGroup) {
 	var batchSize = job.Settings.Write.BatchSize
 
 	if batchSize == 0 {
@@ -135,7 +140,7 @@ func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, sub
 
 	llog := b.log.WithFields(logrus.Fields{
 		"worker_id":   workerID,
-		"subject":     subj,
+		"stream":      stream,
 		"numMessages": numMessages,
 	})
 
@@ -145,56 +150,60 @@ func (b *Bench) runWriterWorker(nc *nats.Conn, job *types.Job, workerID int, sub
 	worker.StartedAt = time.Now().UTC()
 
 MAIN:
-	for i := 0; i < numMessages; i += batchSize {
-		futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
+	for _, subj := range job.Settings.Write.Subjects {
+		for i := 0; i < numMessages; i += batchSize {
+			futures := make([]nats.PubAckFuture, min(batchSize, numMessages-i))
 
-		for j := 0; j < batchSize && i+j < numMessages; j++ {
-			futures[j], err = js.PublishAsync(subj, data)
-			if err != nil {
-				llog.Errorf("unable to JS async publish message: %s", err)
-				worker.NumErrors++
-				worker.Errors = append(worker.Errors, err.Error())
+			for j := 0; j < batchSize && i+j < numMessages; j++ {
+				fullSubj := fmt.Sprintf("%s.%s", stream, subj)
 
-				if worker.NumErrors > numMessages {
-					llog.Error("worker exiting prematurely due to too many errors")
-					break MAIN
-				}
-
-				continue
-			}
-		}
-
-		select {
-		case <-job.Context.Done():
-			llog.Debug("worker exiting due to context done")
-			return
-		case <-js.PublishAsyncComplete():
-			for future := range futures {
-				select {
-				case <-futures[future].Ok():
-					worker.NumWritten++
-				case e := <-futures[future].Err():
-					llog.Errorf("PubAsyncFuture for message %v in batch not OK: %v", future, e)
-
+				futures[j], err = js.PublishAsync(fullSubj, data)
+				if err != nil {
+					llog.Errorf("unable to JS async publish message: %s", err)
 					worker.NumErrors++
-					worker.Errors = append(worker.Errors, e.Error())
+					worker.Errors = append(worker.Errors, err.Error())
 
 					if worker.NumErrors > numMessages {
 						llog.Error("worker exiting prematurely due to too many errors")
 						break MAIN
 					}
+
+					continue
 				}
 			}
-		case <-time.After(10 * time.Second):
-			llog.Error("PublishAsyncComplete timed out after 10s")
 
-			worker.NumErrors++
-			worker.Errors = append(worker.Errors, fmt.Sprintf(
-				"PublishAsyncComplete timed out after 10s (pending: %d)", js.PublishAsyncPending()))
+			select {
+			case <-job.Context.Done():
+				llog.Debug("worker exiting due to context done")
+				return
+			case <-js.PublishAsyncComplete():
+				for future := range futures {
+					select {
+					case <-futures[future].Ok():
+						worker.NumWritten++
+					case e := <-futures[future].Err():
+						llog.Errorf("PubAsyncFuture for message %v in batch not OK: %v", future, e)
 
-			if worker.NumErrors > numMessages {
-				llog.Error("worker exiting prematurely due to too many errors")
-				break MAIN
+						worker.NumErrors++
+						worker.Errors = append(worker.Errors, e.Error())
+
+						if worker.NumErrors > numMessages {
+							llog.Error("worker exiting prematurely due to too many errors")
+							break MAIN
+						}
+					}
+				}
+			case <-time.After(10 * time.Second):
+				llog.Error("PublishAsyncComplete timed out after 10s")
+
+				worker.NumErrors++
+				worker.Errors = append(worker.Errors, fmt.Sprintf(
+					"PublishAsyncComplete timed out after 10s (pending: %d)", js.PublishAsyncPending()))
+
+				if worker.NumErrors > numMessages {
+					llog.Error("worker exiting prematurely due to too many errors")
+					break MAIN
+				}
 			}
 		}
 	}
