@@ -25,8 +25,6 @@ func (b *Bench) CreateMsgHandler(msg *nats.Msg) {
 		"node_id": b.params.NodeID,
 	})
 
-	llog.Debugf("Data contents: %v", string(msg.Data))
-
 	llog.Info("Received new create job")
 
 	job := b.newJob(jobID)

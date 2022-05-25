@@ -489,10 +489,7 @@ func (b *Bench) createWriteJobs(settings *types.Settings) ([]*types.Job, error) 
 
 	settings.Write.NumNodes = numSelectedNodes
 
-	logrus.Debugf("Subjects: %+v", settings.Write.Subjects)
-
 	for i := 0; i < numSelectedNodes; i++ {
-
 		jobs = append(jobs, &types.Job{
 			NodeID: nodes[i],
 			Settings: &types.Settings{
