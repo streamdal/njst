@@ -36,6 +36,12 @@
 * **Notes**:
   * `num_nodes`: Number of nodes that will participate in the benchmark; 0 == all nodes
   * `shared_connection`: in `nats` section will cause workers to share the NATS connection
+  * `subjects` will cause consumers to be created with `FilterSubject`; this expects
+    that the write benchmark was _also_ created with the same `subjects` attribute
+    * **NOTE**: Each subject will spawn a dedicated goroutine on top of the 1
+      goroutine spawned per stream. In other words: if you specify more than 1
+      subject, `njst` will launch `num_workers_per_stream X num_subjects` goroutines.
+    * If `subjects` is left unspecified, the subject will be set to `default`.
 * **Request type**: `application/json`
 * **Response type**: `application/json`
 * **Sample response**:
@@ -52,10 +58,11 @@
       "read": {
         "write_id": "MoyKvzIL",
         "num_nodes": 2,
-        "num_streams": 1,
+        "num_streams": 1,                   
         "num_messages_per_stream": 1000000,
-        "num_workers_per_stream": 2,
-        "batch_size": 1000
+        "num_workers_per_stream": 2,       
+        "batch_size": 1000,
+        "subjects": ["foo", "bar"]
       },
       "nats" : {
           "address":"localhost:4222",
@@ -86,7 +93,7 @@
 ## GET /bench/:id
 * **Description**: Get stats for a specific job
 * **Request**: None
-* **Params**
+* **Query Params**
   * `full`: Will include stats with node reports (default: false)
 * **Response type**: `application/json`
 * **Sample response**:
@@ -289,6 +296,17 @@
 }
 ```
 
+## POST /bench/purge
+* **Description**: Delete all streams, k/v stores and result sets created by `njst`
+* **Request Type**: `application/json`
+* **Error Response**: `!200`
+* **Sample Request**
+
+```json
+{
+  "all": true
+}
+```
 
 ## GET /version
 

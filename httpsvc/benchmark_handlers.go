@@ -243,6 +243,10 @@ func validateReadSettings(rs *types.ReadSettings) error {
 		rs.NumMessagesPerStream = bench.DefaultNumMessagesPerStream
 	}
 
+	if len(rs.Subjects) == 0 {
+		rs.Subjects = []string{bench.DefaultSubject}
+	}
+
 	return nil
 }
 

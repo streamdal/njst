@@ -64,6 +64,7 @@ type ReadSettings struct {
 	Nodes                []string `json:"nodes"`
 	NumMessagesPerStream int      `json:"num_messages_per_stream"`
 	NumWorkersPerStream  int      `json:"num_workers_per_stream"`
+	Subjects             []string `json:"subjects"`
 	BatchSize            int      `json:"batch_size"`
 	Strategy             string   `json:"strategy"`
 
@@ -74,6 +75,7 @@ type ReadSettings struct {
 type StreamInfo struct {
 	StreamName  string
 	DurableName string
+	SubjectName string
 }
 
 type StatusResponse struct {
